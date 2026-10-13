@@ -1,4 +1,4 @@
-<title>Peptide Mapper</title>
+<title>Minigene Peptide Mapper</title>
 <!-- Layout: instrument panel — fixed intake rail on top, then one full-width map per construct, detail table below -->
 <style>
   :root{
@@ -15,6 +15,7 @@
     --warn-soft:#f6e2d4;
     --muted-mark:#8b93a3;  /* reporter / tag */
     --ok:#2f6b46;
+    --bad:#b3261e;
     --shadow:0 1px 2px rgba(23,26,33,.08),0 4px 14px rgba(23,26,33,.06);
     --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
     --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
@@ -23,14 +24,14 @@
     :root:not([data-theme="light"]){
       --bg:#14171c; --surface:#1c2027; --surface-2:#23282f; --ink:#e9ebef; --ink-2:#b2b9c4;
       --ink-3:#848d9b; --rule:#333a44; --accent:#5fb3cf; --accent-soft:#1e3b47;
-      --warn:#d98f5f; --warn-soft:#3d2b1e; --muted-mark:#6d7684; --ok:#6cba8a;
+      --warn:#d98f5f; --warn-soft:#3d2b1e; --muted-mark:#6d7684; --ok:#6cba8a; --bad:#f2928a;
       --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3); color-scheme:dark;
     }
   }
   :root[data-theme="dark"]{
     --bg:#14171c; --surface:#1c2027; --surface-2:#23282f; --ink:#e9ebef; --ink-2:#b2b9c4;
     --ink-3:#848d9b; --rule:#333a44; --accent:#5fb3cf; --accent-soft:#1e3b47;
-    --warn:#d98f5f; --warn-soft:#3d2b1e; --muted-mark:#6d7684; --ok:#6cba8a;
+    --warn:#d98f5f; --warn-soft:#3d2b1e; --muted-mark:#6d7684; --ok:#6cba8a; --bad:#f2928a;
     --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3); color-scheme:dark;
   }
   *{box-sizing:border-box}
@@ -111,6 +112,28 @@
   .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.76rem;color:var(--ink-2);margin-top:12px}
   .legend span{display:inline-flex;align-items:center;gap:6px}
   .sw{width:11px;height:11px;border-radius:2px;display:inline-block;border:1px solid rgba(0,0,0,.2)}
+  /* QC */
+  .verdict{display:inline-block;font-size:.7rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+           padding:2px 9px;border-radius:99px;border:1px solid;vertical-align:middle;margin-left:4px}
+  .verdict.ok{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+  .verdict.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-soft)}
+  .verdict.bad{color:var(--bad);border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+  .verdict.neutral{color:var(--ink-3);border-color:var(--rule);background:var(--surface-2)}
+  .card.qc{border-left:3px solid var(--accent)}
+  .qcgrid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:18px;margin-top:12px;align-items:start}
+  @media (max-width:720px){.qcgrid{grid-template-columns:1fr}}
+  svg.qcplot{min-width:0}
+  .devlist{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+  .devlist li{display:flex;justify-content:space-between;gap:10px;font-size:.78rem;border-bottom:1px solid var(--rule);padding-bottom:3px}
+  .devlist b{font-family:var(--mono);font-size:.74rem}
+  .devlist b.up{color:var(--ok)} .devlist b.dn{color:var(--warn)}
+  .qcbtns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .qcbtns button{font-size:.76rem;padding:5px 10px}
+  .qcbox{margin-top:14px;padding:12px 14px;background:var(--surface-2);border-radius:10px}
+  .qchead{display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+  .qcbox .stats{margin:10px 0 6px}
+  .qcbox .stat{background:var(--surface)}
+  .refline{font-size:.75rem;color:var(--ink-3);margin-top:6px;max-width:92ch}
   /* tables */
   .tscroll{overflow-x:auto;margin-top:14px;border:1px solid var(--rule);border-radius:9px}
   table{border-collapse:collapse;width:100%;font-size:.8rem}
@@ -157,7 +180,7 @@
 <div class="wrap">
   <header class="top">
     <div style="min-width:0">
-      <h1>Peptide Mapper</h1>
+      <h1>Minigene Peptide Mapper</h1>
       <p class="sub">Maps peptides from a Proteome Discoverer export onto annotated SnapGene or GenBank
       constructs by six-frame translation, then flags which minigenes were covered and which peptides
       cross an AAY linker junction.</p>
@@ -378,6 +401,41 @@ function parsePeptideRows(rows) {
   }
   return peps;
 }
+/* Master-protein rows, for the sample-level host QC. Peptide-level parsing
+   ignores these; here we want accession, abundance and which database it came from. */
+function parseProteinRows(rows) {
+  let H = null, I = {};
+  const out = [];
+  for (const r of rows) {
+    if (!r || !r.length) continue;
+    const ai = r.findIndex(x => norm(x) === "accession");
+    if (ai >= 0 && r.some(x => ["description", "master"].includes(norm(x)))) {
+      H = r.map(x => String(x ?? "").trim());
+      I = {
+        acc: ai,
+        desc: H.findIndex(x => norm(x) === "description"),
+        master: H.findIndex(x => norm(x) === "master"),
+        mark: H.findIndex(x => norm(x) === "marked as"),
+        ab: H.findIndex(x => /^abundance/i.test(x)),
+        psms: H.findIndex(x => norm(x) === "# psms")
+      };
+      continue;
+    }
+    if (!H || I.acc < 0) continue;
+    const acc = r[I.acc];
+    if (typeof acc !== "string" || !acc.trim()) continue;
+    const master = I.master >= 0 ? String(r[I.master] ?? "") : "Master Protein";
+    if (master && !/master protein$/i.test(master.trim())) continue;
+    out.push({
+      acc: acc.trim(),
+      desc: I.desc >= 0 ? String(r[I.desc] ?? "").split(" OS=")[0] : "",
+      mark: I.mark >= 0 ? String(r[I.mark] ?? "") : "",
+      ab: I.ab >= 0 && isFinite(+r[I.ab]) ? +r[I.ab] : 0,
+      psms: I.psms >= 0 && isFinite(+r[I.psms]) ? +r[I.psms] : 0
+    });
+  }
+  return out;
+}
 function pickField(fields, pats) {
   for (const p of pats) for (const k in fields) if (new RegExp(p, "i").test(k)) return { key: k, val: fields[k] };
   return null;
@@ -423,6 +481,103 @@ const isTargetOnly = g => isTarget(g) && ![...g.marks].some(t => !TARGETISH.test
 const protCount = g => g.nProt || g.accs.size || 0;
 const isSingleProtein = g => protCount(g) === 1;
 const isMultiProtein = g => protCount(g) > 1;
+
+/* ---------------- quality control ----------------
+   The host signature is the background that co-purifies in every run of this
+   workflow. It was derived from the P2218 PILOT S1-S3 exports: master proteins
+   not from the construct database, present in all three, ranked by share of
+   total host abundance, with isoform-ambiguous entries (CV > 35% between runs,
+   e.g. swapping tubulin alpha chains) removed. `s` is parts per 10,000 of host
+   signal. Leave-one-out across those three runs: 30/30 detected, median
+   |log2(observed/expected)| 0.15-0.20. Shuffling abundances gives 7.97. */
+const BUILTIN_SIGNATURE = {
+  name: "P2218 PILOT S1–S3 (n = 3)",
+  proteins: [["P0DOX5", "Immunoglobulin gamma-1 heavy chain", 407.24], ["P68371", "Tubulin beta-4B chain", 283.83],
+  ["P55072", "Transitional endoplasmic reticulum ATPase", 252.67], ["P68104", "Elongation factor 1-alpha 1", 182.47],
+  ["Q14247", "Src substrate cortactin", 164.99], ["P05141", "ADP/ATP translocase 2", 153.93],
+  ["P49750", "YLP motif-containing protein 1", 130.3], ["P11021", "Endoplasmic reticulum chaperone BiP", 120.49],
+  ["P11142", "Heat shock cognate 71 kDa protein", 106.15], ["P0DMV9", "Heat shock 70 kDa protein 1B", 105.37],
+  ["Q06830", "Peroxiredoxin-1", 99.34], ["P60709", "Actin, cytoplasmic 1", 94], ["Q15417", "Calponin-3", 90.96],
+  ["Q14839", "Chromodomain-helicase-DNA-binding protein 4", 87.47],
+  ["Q7KZF4", "Staphylococcal nuclease domain-containing protein 1", 81.95],
+  ["P33992", "DNA replication licensing factor MCM5", 77.65], ["P27824", "Calnexin", 77.08],
+  ["Q9BTE3", "Mini-chromosome maintenance complex-binding protein", 74.18],
+  ["P27816", "Microtubule-associated protein 4", 69], ["Q8NBS9", "Thioredoxin domain-containing protein 5", 67.16],
+  ["O00571", "ATP-dependent RNA helicase DDX3X", 66.64], ["A5YKK6", "CCR4-NOT transcription complex subunit 1", 64.67],
+  ["Q15084", "Protein disulfide-isomerase A6", 60.84], ["P06748", "Nucleophosmin", 55.33],
+  ["P46109", "Crk-like protein", 53.78], ["P07437", "Tubulin beta chain", 51.34],
+  ["Q9UPY3", "Endoribonuclease Dicer", 49.12], ["P49792", "E3 SUMO-protein ligase RanBP2", 49.07],
+  ["P43243", "Matrin-3", 48.98], ["P42166", "Lamina-associated polypeptide 2, isoform alpha", 48.24]]
+};
+/* Reporter signal seen in the same three runs, as ppm of host abundance. */
+const REPORTER_REFERENCE = [
+  { reporter: "EGFP", run: "S2", pct: 62, pep: 11, ppm: 897 },
+  { reporter: "EGFP", run: "S3", pct: 60, pep: 9, ppm: 358 },
+  { reporter: "mCherry", run: "S3", pct: 19, pep: 5, ppm: 97 },
+  { reporter: "any", run: "S1", pct: 0, pep: 0, ppm: 0 }
+];
+function activeSignature() {
+  try {
+    const raw = localStorage.getItem("mpm.signature");
+    if (raw) { const s = JSON.parse(raw); if (s && s.proteins && s.proteins.length) return s; }
+  } catch { /* storage unavailable — fall through to the built-in */ }
+  return BUILTIN_SIGNATURE;
+}
+const median = a => { if (!a.length) return NaN; const s = a.slice().sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+function hostQC(proteins) {
+  const sig = activeSignature();
+  const host = proteins.filter(p => !/TARGET|BAIT|PREY|CONSTRUCT/i.test(p.mark));
+  const tot = host.reduce((a, p) => a + p.ab, 0);
+  if (!tot) return null;
+  const byAcc = new Map(host.map(p => [p.acc, p]));
+  const rows = sig.proteins.map(([acc, desc, exp]) => {
+    const p = byAcc.get(acc);
+    const obs = p && p.ab ? p.ab / tot * 1e4 : 0;
+    return { acc, desc, exp, obs, dev: obs > 0 ? Math.log2(obs / exp) : null };
+  });
+  const found = rows.filter(r => r.obs > 0);
+  const devs = found.map(r => Math.abs(r.dev));
+  const medDev = median(devs);
+  const detFrac = found.length / rows.length;
+  let verdict = "fail", note;
+  if (detFrac >= 0.9 && medDev <= 0.5) { verdict = "pass"; note = "Background matches the reference run."; }
+  else if (detFrac >= 0.75 && medDev <= 1.0) { verdict = "warn"; note = "Background is recognisable but shifted — check loading and wash stringency."; }
+  else note = "Background does not match the reference — different sample type, prep, or a failed pull-down.";
+  return {
+    sig, rows, tot, detected: found.length, n: rows.length, detFrac, medDev,
+    fold: Math.pow(2, medDev), verdict, note,
+    outliers: found.filter(r => Math.abs(r.dev) > 1).sort((a, b) => Math.abs(b.dev) - Math.abs(a.dev)).slice(0, 6),
+    hostProteins: host.length
+  };
+}
+const isFluorescent = f => REPORTER.test(f.name) && !SELFCLV.test(f.name);
+function reporterQC(res, hostTotal) {
+  const feats = res.con.features.filter(isFluorescent);
+  if (!feats.length) return null;
+  const inRep = m => m.overlaps.some(o => isFluorescent(o.feat));
+  /* P2A is shared with any other construct carrying the same 2A, so it is
+     excluded: it says nothing about this reporter. */
+  const rep = res.maps.filter(inRep);
+  const cov = res.coverage.filter(c => isFluorescent(c.feat));
+  const pct = cov.length ? Math.max(...cov.map(c => c.pct)) : 0;
+  const ab = rep.reduce((a, m) => a + (m.pep.abundance || 0), 0);
+  const ppm = hostTotal ? ab / hostTotal * 1e6 : null;
+  const mini = res.maps.filter(m => m.category === "minigene");
+  const miniAb = mini.reduce((a, m) => a + (m.pep.abundance || 0), 0);
+  let verdict, note;
+  if (rep.length >= 3 && pct >= 15) { verdict = "pass"; note = "Reporter clearly expressed — this construct reached the cells and was translated."; }
+  else if (rep.length >= 1) { verdict = "warn"; note = "Only trace reporter signal — low transfection, low expression, or mostly degraded."; }
+  /* Peptides that could only come from THIS construct. A shared 2A peptide does
+     not count, so a bait-only run reads as absent rather than as a failure. */
+  else if (!res.maps.some(m => m.category === "minigene" || m.category === "junction")) {
+    verdict = "none";
+    note = "Nothing specific to this construct was found in the sample. Expected if it was not transfected in this run; otherwise delivery or expression failed.";
+  }
+  else { verdict = "fail"; note = "Minigene peptides are present but no reporter peptide at all — the cassette was expressed while the reporter was not, which points to a truncated or rearranged construct rather than a transfection problem."; }
+  const ref = REPORTER_REFERENCE.filter(r => r.reporter === feats[0].name);
+  return { feats, name: feats.map(f => f.name).join(", "), nPep: rep.length, pct, ab, ppm, miniAb, mini: mini.length, verdict, note, ref, peptides: rep };
+}
 
 /* ---------------- mapping ---------------- */
 const CODING = /^(CDS|gene|ORF|mat_peptide|misc_RNA)$/i;
@@ -513,6 +668,72 @@ function relevantUnmatched(res) {
   const narrowed = !!(res.scope && res.scope.q);
   const rel = res.unmatched.filter(u => narrowed || (u.proteins.size && [...u.proteins].some(p => placedProts.has(p))));
   return { rel, hidden: res.unmatched.length - rel.length };
+}
+
+/* ---------------- QC rendering ---------------- */
+const VERDICT = { pass: ["Pass", "ok"], warn: ["Check", "warn"], fail: ["Fail", "bad"], none: ["Not detected", "neutral"] };
+function renderHostQC(q) {
+  if (!q) return "";
+  const [label, cls] = VERDICT[q.verdict];
+  const W = 560, H = 150, pad = 34;
+  const vals = q.rows.filter(r => r.obs > 0);
+  const lo = Math.min(...vals.map(r => Math.min(r.obs, r.exp))), hi = Math.max(...vals.map(r => Math.max(r.obs, r.exp)));
+  const sx = v => pad + (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (W - pad - 12);
+  const sy = v => H - 26 - (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (H - 44);
+  let dots = `<line x1="${sx(lo)}" y1="${sy(lo)}" x2="${sx(hi)}" y2="${sy(hi)}" stroke="var(--rule)" stroke-dasharray="3 3"/>`;
+  for (const r of vals)
+    dots += `<circle cx="${sx(r.exp).toFixed(1)}" cy="${sy(r.obs).toFixed(1)}" r="3.4"
+      fill="${Math.abs(r.dev) > 1 ? "var(--warn)" : "var(--accent)"}" fill-opacity=".8"><title>${esc(r.desc)}: expected ${r.exp.toFixed(1)}, observed ${r.obs.toFixed(1)} per 10,000</title></circle>`;
+  const missing = q.rows.filter(r => !r.obs).length;
+  return `<section class="card qc">
+    <div class="chead"><h2>Host background check <span class="verdict ${cls}">${label}</span></h2>
+      <div class="meta"><span>${esc(q.sig.name)}</span><span>${q.hostProteins.toLocaleString()} host proteins in this file</span></div></div>
+    <p class="sub">${esc(q.note)}</p>
+    <div class="stats">
+      <div class="stat"><div class="k">signature detected</div><div class="v">${q.detected}<small> / ${q.n}</small></div></div>
+      <div class="stat"><div class="k">median deviation</div><div class="v">${q.fold.toFixed(2)}×<small> expected</small></div></div>
+      <div class="stat"><div class="k">log2 deviation</div><div class="v">${q.medDev.toFixed(2)}</div></div>
+      <div class="stat"><div class="k">outliers &gt; 2×</div><div class="v">${q.outliers.length}</div></div>
+      <div class="stat"><div class="k">not detected</div><div class="v">${missing}</div></div>
+    </div>
+    <div class="qcgrid">
+      <div class="mapbox"><svg class="map qcplot" viewBox="0 0 ${W} ${H}" role="img"
+        aria-label="Observed versus expected abundance for each signature protein">
+        <text class="lanelab" x="${pad}" y="12">observed vs expected share, log scale</text>
+        <text class="ticklab" x="${W / 2}" y="${H - 6}" text-anchor="middle">expected →</text>
+        ${dots}</svg></div>
+      <div>
+        <h3>Largest deviations</h3>
+        ${q.outliers.length ? `<ul class="devlist">` + q.outliers.map(r =>
+    `<li><span>${esc(r.desc)}</span><b class="${r.dev > 0 ? "up" : "dn"}">${r.dev > 0 ? "+" : ""}${r.dev.toFixed(1)} log2</b></li>`).join("") + `</ul>`
+      : `<p class="sub">Every detected signature protein is within 2× of the reference.</p>`}
+        <div class="qcbtns">
+          <button type="button" id="sig-save">Use this file as the baseline</button>
+          <button type="button" id="sig-reset">Restore built-in</button>
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+function renderReporterQC(q, idx) {
+  if (!q) return "";
+  const [label, cls] = VERDICT[q.verdict];
+  const refTxt = q.ref.length
+    ? q.ref.map(r => `${r.run}: ${r.pct}% / ${r.ppm} ppm`).join(" · ")
+    : "no reference run for this reporter";
+  return `<div class="qcbox">
+    <div class="qchead"><h3>Expression check — ${esc(q.name)}</h3><span class="verdict ${cls}">${label}</span></div>
+    <p class="sub">${esc(q.note)}</p>
+    <div class="stats">
+      <div class="stat"><div class="k">reporter peptides</div><div class="v">${q.nPep}</div></div>
+      <div class="stat"><div class="k">reporter coverage</div><div class="v">${q.pct}%</div></div>
+      <div class="stat"><div class="k">signal</div><div class="v">${q.ppm === null ? "—" : q.ppm.toFixed(0)}<small> ppm host</small></div></div>
+      <div class="stat"><div class="k">minigene peptides</div><div class="v">${q.mini}</div></div>
+    </div>
+    <p class="refline">Reference runs — ${esc(refTxt)}. Reporter signal shows the construct was delivered and
+    translated; it is relative MS evidence across comparable runs, not a substitute for flow cytometry on the
+    fluorescent protein. The 2A peptide is excluded because it is shared with any other construct using the same 2A.</p>
+  </div>`;
 }
 
 /* ---------------- rendering ---------------- */
@@ -667,6 +888,7 @@ function renderResult(res, idx) {
       <div class="stat"><div class="k">minigenes covered</div><div class="v">${payloadFeats.length - dead.length}<small> / ${payloadFeats.length}</small></div></div>
       <div class="stat sel"><div class="k">in exports</div><div class="v"><span id="selcount-${idx}">${maps.length}</span><small> / ${maps.length}</small></div></div>
     </div>
+    ${renderReporterQC(res.reporterQC, idx)}
     <div class="mapbox">${renderMap(res, idx)}</div>
     <div class="legend">
       <span><i class="sw" style="background:var(--accent)"></i>within one minigene</span>
@@ -847,6 +1069,34 @@ function buildWorkbook(results) {
   const ws3 = XLSX.utils.aoa_to_sheet(uh);
   ws3["!cols"] = [{ wch: 34 }, { wch: 11 }, { wch: 14 }, { wch: 9 }, { wch: 14 }, { wch: 12 }, { wch: 30 }, { wch: 40 }, { wch: 30 }];
   XLSX.utils.book_append_sheet(wb, ws3, "Unplaced peptides");
+
+  /* QC sheet */
+  const q = [["Check", "Metric", "Value", "Verdict", "Notes"]];
+  if (HOSTQC) {
+    q.push(["Host background", "Signature proteins detected", `${HOSTQC.detected} / ${HOSTQC.n}`, VERDICT[HOSTQC.verdict][0], HOSTQC.sig.name]);
+    q.push(["Host background", "Median |log2(observed/expected)|", +HOSTQC.medDev.toFixed(3), "", `${HOSTQC.fold.toFixed(2)}x off expected`]);
+    q.push(["Host background", "Signature proteins off by >2x", HOSTQC.outliers.length, "", HOSTQC.outliers.map(o => `${o.desc} ${o.dev > 0 ? "+" : ""}${o.dev.toFixed(1)}`).join("; ")]);
+    q.push(["Host background", "Host proteins in file", HOSTQC.hostProteins, "", HOSTQC.note]);
+    q.push([]);
+    q.push(["Signature protein", "Accession", "Expected (per 10,000)", "Observed (per 10,000)", "log2 ratio"]);
+    for (const r of HOSTQC.rows) q.push([r.desc, r.acc, r.exp, +r.obs.toFixed(2), r.dev === null ? "not detected" : +r.dev.toFixed(2)]);
+    q.push([]);
+  }
+  for (const r of results) {
+    const rq = r.reporterQC;
+    if (!rq) continue;
+    q.push([`Expression — ${r.con.name}`, `Reporter (${rq.name}) peptides`, rq.nPep, VERDICT[rq.verdict][0], rq.note]);
+    q.push([`Expression — ${r.con.name}`, "Reporter sequence coverage", rq.pct + "%", "", ""]);
+    q.push([`Expression — ${r.con.name}`, "Reporter signal (ppm of host)", rq.ppm === null ? "" : +rq.ppm.toFixed(1), "",
+      rq.ref.map(x => `${x.run}: ${x.pct}% / ${x.ppm} ppm`).join("; ")]);
+    q.push([`Expression — ${r.con.name}`, "Minigene peptides", rq.mini, "", ""]);
+    q.push([]);
+  }
+  if (q.length > 1) {
+    const ws4 = XLSX.utils.aoa_to_sheet(q);
+    ws4["!cols"] = [{ wch: 30 }, { wch: 34 }, { wch: 20 }, { wch: 12 }, { wch: 70 }];
+    XLSX.utils.book_append_sheet(wb, ws4, "QC");
+  }
   return wb;
 }
 
@@ -906,7 +1156,7 @@ function storeZip(files) {
 
 /* ---------------- app state ---------------- */
 const $ = id => document.getElementById(id);
-let PEPS = [], CONSTRUCTS = [], RESULTS = [], usingExample = true;
+let PEPS = [], CONSTRUCTS = [], RESULTS = [], PROTEINS = [], HOSTQC = null, HOSTTOTAL = 0, XLNAME = "", usingExample = true;
 
 function setStatus(msg, err) { const s = $("st"); s.textContent = msg; s.classList.toggle("err", !!err); }
 function refreshButtons() {
@@ -937,6 +1187,10 @@ async function loadPeptideFile(file) {
   }
   const parsed = parsePeptideRows(rows);
   if (!parsed.length) throw new Error(`no peptide column found in ${file.name} — expected a header cell named "Annotated Sequence", "Sequence" or "Peptide"`);
+  PROTEINS = parseProteinRows(rows);
+  HOSTTOTAL = PROTEINS.filter(p => !/TARGET|BAIT|PREY|CONSTRUCT/i.test(p.mark)).reduce((a, p) => a + p.ab, 0);
+  HOSTQC = hostQC(PROTEINS);
+  XLNAME = file.name.replace(/\.[^.]+$/, "");
   return aggregate(parsed);
 }
 async function loadConstructFile(file) {
@@ -989,7 +1243,11 @@ function run() {
       : "No peptides left after the length cutoff.", true);
     return;
   }
-  RESULTS = CONSTRUCTS.map(c => Object.assign(mapPeptides(c, sc.kept), { offered: sc.kept.length, scope: sc }));
+  RESULTS = CONSTRUCTS.map(c => {
+    const r = Object.assign(mapPeptides(c, sc.kept), { offered: sc.kept.length, scope: sc });
+    r.reporterQC = reporterQC(r, HOSTTOTAL);
+    return r;
+  });
   usingExample = false;
   draw();
   const placed = new Set();
@@ -1010,9 +1268,30 @@ function markIds() {
 }
 function draw() {
   markIds();
-  $("out").innerHTML = RESULTS.map((r, i) => renderResult(r, i)).join("");
-  wireHover(); wireSelection();
+  $("out").innerHTML = renderHostQC(HOSTQC) + RESULTS.map((r, i) => renderResult(r, i)).join("");
+  wireHover(); wireSelection(); wireSignature();
   RESULTS.forEach((r, i) => syncSelection(i));
+}
+function wireSignature() {
+  const save = $("sig-save"), reset = $("sig-reset");
+  if (save) save.addEventListener("click", () => {
+    if (!PROTEINS.length) return;
+    const host = PROTEINS.filter(p => !/TARGET|BAIT|PREY|CONSTRUCT/i.test(p.mark) && p.ab > 0);
+    const tot = host.reduce((a, p) => a + p.ab, 0);
+    const proteins = host.slice().sort((a, b) => b.ab - a.ab).slice(0, 30)
+      .map(p => [p.acc, p.desc.slice(0, 52), +(p.ab / tot * 1e4).toFixed(2)]);
+    const sig = { name: `${XLNAME || "this file"} (n = 1)`, proteins };
+    try {
+      localStorage.setItem("mpm.signature", JSON.stringify(sig));
+      HOSTQC = hostQC(PROTEINS); draw();
+      setStatus("Host baseline saved in this browser. A single run is a weaker reference than the built-in three-run one.");
+    } catch { setStatus("Could not save the baseline — this browser is blocking site storage.", true); }
+  });
+  if (reset) reset.addEventListener("click", () => {
+    try { localStorage.removeItem("mpm.signature"); } catch { /* nothing stored */ }
+    HOSTQC = hostQC(PROTEINS); draw();
+    setStatus("Restored the built-in host signature.");
+  });
 }
 /* Update the card in place — re-rendering would lose scroll position and focus. */
 function syncSelection(i) {
@@ -1152,7 +1431,10 @@ function loadExample() {
   CONSTRUCTS = [con];
   applyScopeAvailability();
   const sc = scopePeptides();
-  RESULTS = [Object.assign(mapPeptides(con, sc.kept), { offered: sc.kept.length, scope: sc, isExample: true })];
+  const r = Object.assign(mapPeptides(con, sc.kept), { offered: sc.kept.length, scope: sc, isExample: true });
+  r.reporterQC = reporterQC(r, 1e9);
+  RESULTS = [r];
+  HOSTQC = null;
   usingExample = true;
   draw(); refreshButtons();
 }
