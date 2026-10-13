@@ -1,0 +1,1227 @@
+<title>Peptide Mapper</title>
+<!-- Layout: instrument panel — fixed intake rail on top, then one full-width map per construct, detail table below -->
+<style>
+  :root{
+    --bg:#f4f5f7;          /* paper, slightly blue-biased */
+    --surface:#ffffff;
+    --surface-2:#eceef2;
+    --ink:#171a21;
+    --ink-2:#4a515e;
+    --ink-3:#757e8d;
+    --rule:#d4d8e0;
+    --accent:#1f6f8b;      /* instrument teal */
+    --accent-soft:#d7e8ee;
+    --warn:#a8572b;        /* junction-spanning */
+    --warn-soft:#f6e2d4;
+    --muted-mark:#8b93a3;  /* reporter / tag */
+    --ok:#2f6b46;
+    --shadow:0 1px 2px rgba(23,26,33,.08),0 4px 14px rgba(23,26,33,.06);
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#14171c; --surface:#1c2027; --surface-2:#23282f; --ink:#e9ebef; --ink-2:#b2b9c4;
+      --ink-3:#848d9b; --rule:#333a44; --accent:#5fb3cf; --accent-soft:#1e3b47;
+      --warn:#d98f5f; --warn-soft:#3d2b1e; --muted-mark:#6d7684; --ok:#6cba8a;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3); color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14171c; --surface:#1c2027; --surface-2:#23282f; --ink:#e9ebef; --ink-2:#b2b9c4;
+    --ink-3:#848d9b; --rule:#333a44; --accent:#5fb3cf; --accent-soft:#1e3b47;
+    --warn:#d98f5f; --warn-soft:#3d2b1e; --muted-mark:#6d7684; --ok:#6cba8a;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3); color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;margin:0}
+  .wrap{max-width:1240px;margin:0 auto;padding-inline:16px;padding-block:24px 56px}
+  h1{font-size:clamp(1.25rem,1rem + 1.1vw,1.6rem);font-weight:600;letter-spacing:-.01em;margin:0;text-wrap:balance}
+  h2{font-size:1.05rem;font-weight:600;margin:0;letter-spacing:-.005em}
+  h3{font-size:.72rem;font-weight:600;margin:0;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3)}
+  p{margin:0}
+  .sub{color:var(--ink-2);font-size:.9rem;max-width:68ch}
+  header.top{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:baseline;justify-content:space-between;margin-bottom:20px}
+  /* intake */
+  .intake{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-bottom:14px}
+  .drop{background:var(--surface);border:1px dashed var(--rule);border-radius:10px;padding:14px;display:flex;
+        flex-direction:column;gap:6px;min-width:0;transition:border-color .15s,background .15s}
+  .drop.hot{border-color:var(--accent);background:var(--accent-soft)}
+  .drop label{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);font-weight:600}
+  .drop .hint{font-size:.8rem;color:var(--ink-3)}
+  .drop .files{font-family:var(--mono);font-size:.78rem;color:var(--ink-2);word-break:break-all;display:flex;flex-direction:column;gap:2px}
+  input[type=file]{font:inherit;font-size:.8rem;color:var(--ink-2);max-width:100%}
+  input[type=file]::file-selector-button{font:inherit;font-size:.78rem;padding:4px 10px;margin-right:8px;border-radius:6px;
+        border:1px solid var(--rule);background:var(--surface-2);color:var(--ink);cursor:pointer}
+  .scope{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px}
+  .fld{display:flex;flex-direction:column;gap:4px;flex:1 1 280px;min-width:0}
+  .fld.narrow{flex:0 1 160px}
+  .fld label{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);font-weight:600}
+  .fld input,.fld select{font:inherit;font-size:.85rem;padding:7px 10px;border-radius:7px;border:1px solid var(--rule);
+             background:var(--surface);color:var(--ink);width:100%;min-width:0}
+  .fld input::placeholder{color:var(--ink-3)}
+  .fld select:disabled{opacity:.55;cursor:not-allowed}
+  .fld .note{font-size:.75rem;color:var(--ink-3)}
+  .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+  button{font:inherit;font-size:.84rem;padding:7px 13px;border-radius:7px;border:1px solid var(--rule);
+          background:var(--surface);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+  button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover:not(:disabled){filter:brightness(1.08);color:#fff}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .status{font-size:.84rem;color:var(--ink-2);min-height:1.3em}
+  .status.err{color:var(--warn);font-weight:500}
+  /* construct card */
+  .card{background:var(--surface);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--shadow);
+        padding:18px;margin-bottom:22px;min-width:0}
+  .chead{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:baseline;justify-content:space-between;margin-bottom:4px}
+  .meta{font-family:var(--mono);font-size:.78rem;color:var(--ink-3);display:flex;flex-wrap:wrap;gap:12px}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin:14px 0 6px}
+  .stat{background:var(--surface-2);border-radius:8px;padding:9px 11px;min-width:0}
+  .stat .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3);font-weight:600}
+  .stat .v{font-family:var(--mono);font-size:1.12rem;font-variant-numeric:tabular-nums;margin-top:1px}
+  .stat .v small{font-size:.7rem;color:var(--ink-3)}
+  .mapbox{overflow-x:auto;margin:10px -4px 0;padding:0 4px}
+  svg.map{display:block;min-width:620px;width:100%;height:auto;font-family:var(--mono)}
+  svg.map text{fill:var(--ink-2)}
+  svg.map .ticklab{font-size:9px;fill:var(--ink-3)}
+  svg.map .lanelab{font-size:9px;fill:var(--ink-3);text-transform:uppercase;letter-spacing:.07em}
+  svg.map .featlab{font-size:9.5px;font-weight:500}
+  svg.map .pep{cursor:pointer}
+  svg.map .pep rect{stroke:rgba(0,0,0,.18)}
+  svg.map .pep:hover rect,svg.map .pep.sel rect{stroke:var(--ink);stroke-width:1.6}
+  /* selection */
+  svg.map .pep.off rect{opacity:.22}
+  svg.map .pep.off text{opacity:.3}
+  .groups{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;margin-top:16px;padding:10px 12px;
+          background:var(--surface-2);border-radius:9px}
+  .groups h3{flex:0 0 auto;margin-right:2px}
+  .gchk{display:inline-flex;align-items:center;gap:6px;font-size:.8rem;color:var(--ink-2);cursor:pointer;user-select:none}
+  .gchk input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;margin:0}
+  .gchk b{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink)}
+  .gchk .sw{margin-right:1px}
+  th.cbh{width:34px}
+  td.cbc{width:34px;padding-right:0}
+  td.cbc input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;margin:0;display:block}
+  tbody tr.off td:not(.cbc){opacity:.42}
+  tbody tr.off td.seq{text-decoration:line-through}
+  .stat.sel .v{color:var(--accent)}
+  .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.76rem;color:var(--ink-2);margin-top:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:2px;display:inline-block;border:1px solid rgba(0,0,0,.2)}
+  /* tables */
+  .tscroll{overflow-x:auto;margin-top:14px;border:1px solid var(--rule);border-radius:9px}
+  table{border-collapse:collapse;width:100%;font-size:.8rem}
+  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule);white-space:nowrap}
+  th{background:var(--surface-2);font-size:.69rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);
+     font-weight:600;position:sticky;top:0}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:var(--surface-2)}
+  tbody tr.sel td{background:var(--accent-soft)}
+  td.seq{font-family:var(--mono);font-size:.78rem}
+  td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+  .pill{display:inline-block;font-size:.69rem;font-weight:600;padding:1px 7px;border-radius:99px;
+        border:1px solid transparent;letter-spacing:.02em}
+  .pill.mini{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+  .pill.junc{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+  .pill.rep{background:var(--surface-2);color:var(--ink-3);border-color:var(--rule)}
+  .pill.one{background:transparent;color:var(--ok);border-color:var(--ok)}
+  .pill.many{background:transparent;color:var(--ink-2);border-color:var(--ink-3);border-style:dashed}
+  .sw.notch{background:var(--surface-2);border-color:var(--ink-3);position:relative;overflow:hidden}
+  .sw.notch::after{content:"";position:absolute;top:0;right:0;border-top:6px solid var(--ink-3);border-left:6px solid transparent}
+  .gsep{width:1px;align-self:stretch;background:var(--rule);margin:0 2px}
+  .mini-btn{font-size:.76rem;padding:3px 9px;border-radius:6px}
+  .nocov{font-family:var(--mono);font-size:.78rem;color:var(--ink-2);margin-top:10px;line-height:1.7}
+  .nocov b{color:var(--warn);font-weight:600}
+  details{margin-top:14px;border-top:1px solid var(--rule);padding-top:12px}
+  summary{cursor:pointer;font-size:.8rem;color:var(--ink-2);font-weight:500}
+  summary::marker{color:var(--ink-3)}
+  /* tooltip */
+  #tip{position:fixed;z-index:50;max-width:330px;background:var(--surface);color:var(--ink);border:1px solid var(--rule);
+       border-radius:9px;box-shadow:var(--shadow);padding:10px 12px;font-size:.78rem;pointer-events:none;opacity:0;
+       transition:opacity .09s;line-height:1.45}
+  #tip.on{opacity:1}
+  #tip .tseq{font-family:var(--mono);font-size:.82rem;font-weight:600;word-break:break-all;margin-bottom:5px;display:block}
+  #tip dl{display:grid;grid-template-columns:auto 1fr;gap:1px 9px;margin:0}
+  #tip dt{color:var(--ink-3);font-size:.72rem}
+  #tip dd{margin:0;font-family:var(--mono);font-size:.74rem;word-break:break-word}
+  .ex{display:inline-block;font-size:.69rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+      background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn);border-radius:99px;padding:1px 8px}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<div class="wrap">
+  <header class="top">
+    <div style="min-width:0">
+      <h1>Peptide Mapper</h1>
+      <p class="sub">Maps peptides from a Proteome Discoverer export onto annotated SnapGene or GenBank
+      constructs by six-frame translation, then flags which minigenes were covered and which peptides
+      cross an AAY linker junction.</p>
+    </div>
+  </header>
+
+  <div class="intake">
+    <div class="drop" id="dz-xl">
+      <label for="f-xl">1 · Peptide export</label>
+      <input type="file" id="f-xl" accept=".xlsx,.xlsm,.xls,.csv,.tsv,.txt">
+      <span class="hint">Proteome Discoverer .xlsx (nested or flat), or CSV/TSV</span>
+      <span class="files" id="n-xl"></span>
+    </div>
+    <div class="drop" id="dz-sq">
+      <label for="f-sq">2 · Construct files (1–4)</label>
+      <input type="file" id="f-sq" accept=".dna,.gb,.gbk,.genbank,.ape" multiple>
+      <span class="hint">SnapGene .dna, or GenBank .gb / .gbk</span>
+      <span class="files" id="n-sq"></span>
+    </div>
+  </div>
+
+  <div class="scope">
+    <div class="fld">
+      <label for="scope">Peptides to map</label>
+      <select id="scope">
+        <option value="target">Targets only — from the construct database</option>
+        <option value="unique">Targets only, excluding sequences shared with the host proteome</option>
+        <option value="all">Every peptide in the export</option>
+      </select>
+      <span class="note" id="scope-note"></span>
+    </div>
+    <div class="fld">
+      <label for="filt">Also restrict to proteins matching</label>
+      <input type="text" id="filt" placeholder="e.g. TARGET, Prey, U948 — blank searches every peptide">
+    </div>
+    <div class="fld narrow">
+      <label for="minlen">Min. peptide length</label>
+      <input type="number" id="minlen" value="7" min="4" max="40" step="1">
+    </div>
+  </div>
+
+  <div class="bar">
+    <button class="primary" id="go" disabled>Map peptides</button>
+    <button id="dl-gb" disabled>Annotated sequence files</button>
+    <button id="dl-xl" disabled>Mapping workbook (.xlsx)</button>
+    <button id="demo">Load example</button>
+  </div>
+  <p class="status" id="st">Example data shown below. Load your own files to replace it.</p>
+
+  <div id="out"></div>
+</div>
+<div id="tip" role="tooltip" aria-hidden="true"></div>
+
+<script>
+"use strict";
+/* ---------------- genetic code ---------------- */
+const CODON = (() => {
+  const b = "TCAG", aa = "FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG", m = {};
+  let i = 0;
+  for (const a of b) for (const c of b) for (const g of b) m[a + c + g] = aa[i++];
+  return m;
+})();
+const translate = s => { let o = ""; for (let i = 0; i + 2 < s.length; i += 3) o += CODON[s.substr(i, 3)] ?? "X"; return o; };
+const revcomp = s => { let o = ""; for (let i = s.length - 1; i >= 0; i--) o += ({ A: "T", T: "A", G: "C", C: "G", N: "N" })[s[i]] ?? "N"; return o; };
+
+/* ---------------- SnapGene .dna ---------------- */
+function parseDNA(buf, name) {
+  const d = new DataView(buf), u8 = new Uint8Array(buf);
+  let i = 0, seq = "", featXML = "", notes = "", circular = false;
+  if (u8[0] !== 9) throw new Error("not a SnapGene file (bad magic byte)");
+  const td = new TextDecoder("utf-8");
+  while (i + 5 <= u8.length) {
+    const t = u8[i], n = d.getUint32(i + 1, false), body = u8.subarray(i + 5, i + 5 + n);
+    i += 5 + n;
+    if (n < 0 || i > u8.length + 1) break;
+    if (t === 0) { circular = (body[0] & 1) === 1; seq = td.decode(body.subarray(1)).toUpperCase().replace(/[^A-Z]/g, ""); }
+    else if (t === 10) featXML = td.decode(body);
+    else if (t === 6) notes = td.decode(body);
+  }
+  if (!seq) throw new Error("no DNA sequence block found");
+  let title = name.replace(/\.[^.]+$/, "");
+  const dm = notes.match(/<Description>([\s\S]*?)<\/Description>/);
+  if (dm) { const t = unwrapHTML(dm[1]); if (t) title = t; }
+  return { name: title, seq, circular, features: featuresFromXML(featXML), source: "SnapGene" };
+}
+/* SnapGene wraps free text as HTML, sometimes entity-escaped once or twice */
+function unwrapHTML(s) {
+  let t = String(s ?? "");
+  for (let i = 0; i < 2; i++) t = t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  return t.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+}
+function featuresFromXML(xml) {
+  if (!xml) return [];
+  const doc = new DOMParser().parseFromString(xml, "text/xml"), out = [];
+  for (const f of doc.getElementsByTagName("Feature")) {
+    const segs = [...f.getElementsByTagName("Segment")].map(s => {
+      const r = (s.getAttribute("range") || "").split("-");
+      return { start: +r[0], end: +r[1], color: s.getAttribute("color") || "" };
+    }).filter(s => s.start > 0 && s.end >= s.start);
+    if (!segs.length) continue;
+    const q = {};
+    for (const qq of f.getElementsByTagName("Q")) {
+      const v = qq.getElementsByTagName("V")[0];
+      if (!v) continue;
+      q[qq.getAttribute("name")] = unwrapHTML(v.getAttribute("text") || v.getAttribute("int") || "");
+    }
+    out.push({
+      name: f.getAttribute("name") || "(unnamed)",
+      type: f.getAttribute("type") || "misc_feature",
+      strand: f.getAttribute("directionality") === "2" ? -1 : 1,
+      start: Math.min(...segs.map(s => s.start)), end: Math.max(...segs.map(s => s.end)),
+      segs, color: segs.find(s => s.color)?.color || "", qual: q,
+      translation: (q.translation || "").replace(/,/g, "")
+    });
+  }
+  return out.sort((a, b) => a.start - b.start || b.end - a.end);
+}
+
+/* ---------------- GenBank text ---------------- */
+function parseGB(text, name) {
+  const lines = text.split(/\r?\n/);
+  let seq = "", circular = false, title = name.replace(/\.[^.]+$/, ""), inFeat = false, inSeq = false;
+  const feats = []; let cur = null, lastQ = null;
+  const flush = () => { if (cur) { feats.push(cur); cur = null; } };
+  for (const ln of lines) {
+    if (/^LOCUS\s/.test(ln)) {
+      const p = ln.trim().split(/\s+/); if (p[1]) title = p[1];
+      if (/circular/i.test(ln)) circular = true; continue;
+    }
+    if (/^DEFINITION\s/.test(ln)) { const t = ln.slice(12).trim(); if (t && /^\w/.test(t) && title.length < 3) title = t; continue; }
+    if (/^FEATURES\s/.test(ln)) { inFeat = true; continue; }
+    if (/^(ORIGIN|SEQUENCE)/.test(ln)) { flush(); inFeat = false; inSeq = true; continue; }
+    if (/^\/\//.test(ln)) { inSeq = false; continue; }
+    if (inSeq) { seq += ln.replace(/[^A-Za-z]/g, ""); continue; }
+    if (!inFeat) continue;
+    const m = ln.match(/^ {5}(\S+)\s+(.+)$/);
+    if (m) {
+      flush(); lastQ = null;
+      const loc = m[2].trim(), strand = /complement/i.test(loc) ? -1 : 1;
+      const nums = [...loc.matchAll(/(\d+)/g)].map(x => +x[1]);
+      if (!nums.length) continue;
+      const segs = []; const pairs = [...loc.matchAll(/(\d+)\s*\.\.\s*>?(\d+)/g)];
+      if (pairs.length) for (const p of pairs) segs.push({ start: +p[1], end: +p[2], color: "" });
+      else segs.push({ start: nums[0], end: nums[0], color: "" });
+      cur = { name: "", type: m[1], strand, start: Math.min(...nums), end: Math.max(...nums), segs, color: "", qual: {}, translation: "" };
+      continue;
+    }
+    const q = ln.match(/^ {21}\/(\w+)=?"?([^"]*)"?/);
+    if (q && cur) {
+      lastQ = q[1]; const val = (q[2] || "").trim();
+      cur.qual[lastQ] = (cur.qual[lastQ] ? cur.qual[lastQ] + " " : "") + val;
+      continue;
+    }
+    const cont = ln.match(/^ {21}(.+?)"?$/);
+    if (cont && cur && lastQ) cur.qual[lastQ] += (lastQ === "translation" ? "" : " ") + cont[1].trim();
+  }
+  flush();
+  for (const f of feats) {
+    f.name = f.qual.label || f.qual.gene || f.qual.product || f.qual.note || f.type;
+    f.translation = (f.qual.translation || "").replace(/\s|,/g, "");
+    const cm = (f.qual.note || "").match(/color:\s*(#[0-9a-fA-F]{6})/);
+    if (cm) f.color = cm[1];
+  }
+  if (!seq) throw new Error("no ORIGIN sequence found");
+  return { name: title, seq: seq.toUpperCase(), circular, features: feats.sort((a, b) => a.start - b.start || b.end - a.end), source: "GenBank" };
+}
+
+/* ---------------- peptide export (xlsx / csv) ---------------- */
+const PEPKEYS = ["annotated sequence", "sequence", "peptide", "peptide sequence", "stripped sequence"];
+const stripPep = s => String(s).replace(/^\[?[A-Za-z-]*\]?\./, "").replace(/\.\[?[A-Za-z-]*\]?$/, "").replace(/[^A-Za-z]/g, "").toUpperCase();
+const norm = s => String(s ?? "").trim().toLowerCase();
+
+const PEPRE = /^(\[?[A-Za-z-]*\]?\.)?[A-Za-z]{4,}(\.\[?[A-Za-z-]*\]?)?$/;
+/* Words that satisfy PEPRE but are table values, not peptides. In a nested PD
+   export the protein and peptide tables are offset by one column, so a protein
+   row whose "Master" reads None lands that word under Annotated Sequence. */
+const NOTPEP = /^(NONE|MASTER|HIGH|MEDIUM|LOW|TRUE|FALSE|CHECKED|PROTEIN|SEQUENCE|PEPTIDE)$/i;
+function parsePeptideRows(rows) {
+  const peps = []; let pHdr = null, pIdx = -1, protHdr = null, pAcc = -1, pDesc = -1, pMark = -1, prot = null;
+  const findPepCol = r => {
+    for (let c = 0; c < r.length; c++) if (PEPKEYS.includes(norm(r[c]))) return c;
+    return -1;
+  };
+  for (const r of rows) {
+    if (!r || !r.length) continue;
+    /* header rows first */
+    const pc = findPepCol(r);
+    if (pc >= 0) { pHdr = r.map(x => String(x ?? "").trim()); pIdx = pc; continue; }
+    const ai = r.findIndex(x => ["accession", "protein accession"].includes(norm(x)));
+    if (ai >= 0 && r.some(x => ["description", "master"].includes(norm(x)))) {
+      protHdr = r.map(x => String(x ?? "").trim());
+      pAcc = ai;
+      pDesc = r.findIndex(x => norm(x) === "description");
+      pMark = r.findIndex(x => norm(x) === "marked as");
+      continue;
+    }
+    /* a peptide row, if it carries a peptide-shaped sequence. When the peptide
+       table is indented under the protein table, a real peptide row also has
+       that leading blank cell — which is what tells the two tables apart. */
+    const indented = pHdr && protHdr && String(pHdr[0] ?? "").trim() === "";
+    if (pHdr && typeof r[pIdx] === "string" && PEPRE.test(r[pIdx].trim()) && !NOTPEP.test(r[pIdx].trim())
+      && (!indented || String(r[0] ?? "").trim() === "")) {
+      const pep = stripPep(r[pIdx].trim());
+      if (pep.length < 4) continue;
+      const rec = { seq: pep, raw: r[pIdx].trim(), fields: {}, protein: prot };
+      for (let c = 0; c < pHdr.length; c++) if (pHdr[c] && r[c] !== undefined && r[c] !== null && r[c] !== "") rec.fields[pHdr[c]] = r[c];
+      peps.push(rec);
+      continue;
+    }
+    /* otherwise a protein row opens a new parent group */
+    if (protHdr && pAcc >= 0 && typeof r[pAcc] === "string" && r[pAcc].trim()) {
+      prot = {
+        acc: r[pAcc].trim(),
+        desc: pDesc >= 0 ? String(r[pDesc] ?? "").trim() : "",
+        mark: pMark >= 0 ? String(r[pMark] ?? "").trim() : ""
+      };
+    }
+  }
+  return peps;
+}
+function pickField(fields, pats) {
+  for (const p of pats) for (const k in fields) if (new RegExp(p, "i").test(k)) return { key: k, val: fields[k] };
+  return null;
+}
+function aggregate(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    let g = m.get(r.seq);
+    if (!g) { g = { seq: r.seq, n: 0, psms: 0, abundance: 0, conf: new Set(), mods: new Set(), proteins: new Set(), protText: "", marks: new Set(), nProt: 0, accs: new Set(), xcorr: 0, q: null, rt: null, rows: [] }; m.set(r.seq, g); }
+    g.n++; g.rows.push(r);
+    const psm = pickField(r.fields, ["^# ?PSMs$", "psms"]); if (psm && isFinite(+psm.val)) g.psms += +psm.val;
+    const ab = pickField(r.fields, ["^abundance", "intensity", "^area"]); if (ab && isFinite(+ab.val)) g.abundance += +ab.val;
+    const cf = pickField(r.fields, ["^confidence$", "^pep confidence"]); if (cf) g.conf.add(String(cf.val));
+    const md = pickField(r.fields, ["^modifications$"]); if (md && String(md.val).trim()) g.mods.add(String(md.val).trim());
+    const xc = pickField(r.fields, ["xcorr"]); if (xc && isFinite(+xc.val)) g.xcorr = Math.max(g.xcorr, +xc.val);
+    const qv = pickField(r.fields, ["^q-?value", "qvalue"]); if (qv && isFinite(+qv.val)) g.q = g.q === null ? +qv.val : Math.min(g.q, +qv.val);
+    const rt = pickField(r.fields, ["apex rt", "^rt \\[", "retention"]); if (rt && isFinite(+rt.val)) g.rt = +rt.val;
+    if (r.protein) {
+      g.proteins.add(r.protein.acc + (r.protein.desc ? " — " + r.protein.desc.slice(0, 60) : ""));
+      g.protText += " " + r.protein.acc + " " + r.protein.desc + " " + (r.protein.mark || "");
+    }
+    /* "Marked as" says which FASTA the peptide came from: TARGET, HUMAN, or both
+       when the same tryptic sequence exists in each. Peptide-level wins; the
+       parent protein's value is the fallback. */
+    /* How many proteins in the search database contain this exact sequence.
+       More than one means the identification cannot be assigned to the
+       construct alone. */
+    const np = pickField(r.fields, ["^# ?proteins$"]);
+    if (np && isFinite(+np.val)) g.nProt = Math.max(g.nProt, +np.val);
+    const ma = pickField(r.fields, ["^master protein accessions$", "^protein accessions$"]);
+    if (ma) for (const a of String(ma.val).split(/[;,]/)) if (a.trim()) g.accs.add(a.trim());
+    const mk = pickField(r.fields, ["^marked as$"]);
+    const markVal = mk ? String(mk.val) : (r.protein && r.protein.mark) || "";
+    if (markVal.trim()) { g.protText += " " + markVal; for (const t of markVal.split(/[;,|/]/)) if (t.trim()) g.marks.add(t.trim().toUpperCase()); }
+  }
+  for (const g of m.values()) g.protText = g.protText.toLowerCase();
+  return [...m.values()];
+}
+const TARGETISH = /^(TARGET|BAIT|PREY\d*|CONSTRUCT|CUSTOM|MINIGENE)$/;
+const isTarget = g => [...g.marks].some(t => TARGETISH.test(t));
+const isTargetOnly = g => isTarget(g) && ![...g.marks].some(t => !TARGETISH.test(t));
+/* nProt is 0 when the export carries no "# Proteins" column; treat that as unknown. */
+const protCount = g => g.nProt || g.accs.size || 0;
+const isSingleProtein = g => protCount(g) === 1;
+const isMultiProtein = g => protCount(g) > 1;
+
+/* ---------------- mapping ---------------- */
+const CODING = /^(CDS|gene|ORF|mat_peptide|misc_RNA)$/i;
+const REPORTER = /(^|\b)(EGFP|GFP|mCherry|mNeonGreen|mScarlet|YFP|CFP|BFP|dsRed|tdTomato|Venus|mTagBFP|Luciferase|NanoLuc|mOrange|Clover|Cerulean)(\b|$)/i;
+const LINKER = /(linker|AAY|spacer|GSG|furin)/i;
+const SELFCLV = /(P2A|T2A|E2A|F2A|2A peptide|IRES)/i;
+
+function mapPeptides(con, peps) {
+  const L = con.seq.length, fwd = con.seq, rev = revcomp(con.seq);
+  const frames = [];
+  for (let f = 0; f < 3; f++) frames.push({ strand: 1, f, prot: translate(fwd.slice(f)) });
+  for (let f = 0; f < 3; f++) frames.push({ strand: -1, f, prot: translate(rev.slice(f)) });
+  const coding = con.features.filter(f => CODING.test(f.type) || f.translation);
+  const out = [], unmatched = [];
+  for (const p of peps) {
+    const hits = [];
+    for (const fr of frames) {
+      let from = 0, k;
+      while ((k = fr.prot.indexOf(p.seq, from)) !== -1) {
+        from = k + 1;
+        const a = fr.f + k * 3, b = a + p.seq.length * 3;
+        const ntStart = fr.strand === 1 ? a + 1 : L - b + 1;
+        const ntEnd = fr.strand === 1 ? b : L - a;
+        hits.push({ strand: fr.strand, frame: fr.f + 1, ntStart, ntEnd });
+      }
+    }
+    if (!hits.length) { unmatched.push(p); continue; }
+    hits.sort((x, y) => x.ntStart - y.ntStart);
+    for (const h of hits) {
+      const ov = [];
+      for (const f of coding) {
+        const s = Math.max(f.start, h.ntStart), e = Math.min(f.end, h.ntEnd);
+        if (e < s) continue;
+        const nt = e - s + 1;
+        const o = { feat: f, ntOverlap: nt, aaOverlap: Math.round(nt / 3) };
+        if (f.strand === 1) {
+          o.aaFrom = Math.floor((s - f.start) / 3) + 1;
+          o.aaTo = Math.ceil((e - f.start + 1) / 3);
+        } else {
+          o.aaFrom = Math.floor((f.end - e) / 3) + 1;
+          o.aaTo = Math.ceil((f.end - s + 1) / 3);
+        }
+        ov.push(o);
+      }
+      ov.sort((a, b) => b.ntOverlap - a.ntOverlap);
+      const named = ov.filter(o => !LINKER.test(o.feat.name));
+      const payload = named.filter(o => !REPORTER.test(o.feat.name) && !SELFCLV.test(o.feat.name));
+      const crossedLinker = con.features.some(f => LINKER.test(f.name) && f.start <= h.ntEnd && f.end >= h.ntStart);
+      const spansJunction = payload.length > 1 || (crossedLinker && named.length > 1) ||
+        (named.length > 1 && named.some(o => SELFCLV.test(o.feat.name)) && payload.length >= 1);
+      let cat = "unassigned";
+      if (payload.length >= 1) cat = spansJunction ? "junction" : "minigene";
+      else if (named.some(o => REPORTER.test(o.feat.name))) cat = "reporter";
+      else if (named.some(o => SELFCLV.test(o.feat.name))) cat = "reporter";
+      out.push({
+        pep: p, ...h, overlaps: ov, primary: (payload[0] || named[0] || ov[0] || null),
+        category: cat, spansJunction, nHits: hits.length
+      });
+    }
+  }
+  out.sort((a, b) => a.ntStart - b.ntStart);
+  return { con, maps: out, unmatched, coding, coverage: computeCoverage(coding, out) };
+}
+/* Coverage is recomputed from whichever peptides are in play, so an export
+   reflects the current selection rather than everything that was found. */
+function computeCoverage(coding, maps) {
+  return coding.filter(f => !LINKER.test(f.name)).map(f => {
+    const mine = maps.filter(m => m.overlaps.some(o => o.feat === f));
+    const covered = new Set();
+    for (const m of mine) for (const o of m.overlaps) if (o.feat === f) for (let i = o.aaFrom; i <= o.aaTo; i++) covered.add(i);
+    const aaLen = f.translation ? f.translation.length : Math.floor((f.end - f.start + 1) / 3);
+    return {
+      feat: f, aaLen, peptides: mine, nPep: new Set(mine.map(m => m.pep.seq)).size,
+      covAA: covered.size, pct: aaLen ? Math.round(covered.size / aaLen * 100) : 0,
+      isReporter: REPORTER.test(f.name), isSelfCleave: SELFCLV.test(f.name)
+    };
+  });
+}
+const CATS = [["minigene", "Minigene"], ["junction", "Junction-spanning"], ["reporter", "Reporter / 2A"], ["unassigned", "Unassigned"]];
+const selectedMaps = res => res.maps.filter(m => m.selected);
+
+/* Unplaced peptides are only interesting when they came from a protein that DID
+   place something here (or when the user narrowed the scope themselves). An
+   unfiltered PD export carries the whole proteome, which is noise. */
+function relevantUnmatched(res) {
+  const placedProts = new Set();
+  for (const m of res.maps) for (const p of m.pep.proteins) placedProts.add(p);
+  const narrowed = !!(res.scope && res.scope.q);
+  const rel = res.unmatched.filter(u => narrowed || (u.proteins.size && [...u.proteins].some(p => placedProts.has(p))));
+  return { rel, hidden: res.unmatched.length - rel.length };
+}
+
+/* ---------------- rendering ---------------- */
+const MARKCOL = { minigene: "var(--accent)", junction: "var(--warn)", reporter: "var(--muted-mark)", unassigned: "var(--ink-3)" };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmtNum = n => !isFinite(n) || n === 0 ? "—"
+  : n >= 1e5 ? (+n).toExponential(2).replace("e+", "e")
+    : n >= 1000 ? Math.round(n).toLocaleString() : String(+(+n).toFixed(3));
+
+/* Pack into as few lanes as possible, measured in drawn pixels (including any
+   label that sits outside its bar) so nothing overlaps at any construct length. */
+function packLanes(items, extent, gap) {
+  const lanes = [];
+  for (const it of items.slice().sort((a, b) => extent(a)[0] - extent(b)[0])) {
+    const [s, e] = extent(it);
+    let placed = false;
+    for (const ln of lanes) {
+      if (ln.end + gap <= s) { ln.items.push(it); ln.end = Math.max(ln.end, e); placed = true; break; }
+    }
+    if (!placed) lanes.push({ items: [it], end: e });
+  }
+  return lanes.map(l => l.items);
+}
+function renderMap(res, idx) {
+  const { con, maps } = res, L = con.seq.length;
+  const W = 1100, padL = 108, padR = 22, iw = W - padL - padR;
+  const x = n => padL + (n - 1) / L * iw;
+  const LBL = 5.7, isAnno = f => CODING.test(f.type) || f.translation || LINKER.test(f.name);
+  /* a bar reserves its own width, plus room for a label it cannot fit inside */
+  const barExtent = (fs, fe, label, charW, minW) => {
+    const x0 = x(fs), x1 = Math.max(x(fe), x0 + minW), lab = label.length * charW + 8;
+    return [x0, x1 - x0 > lab ? x1 : x1 + lab + 6];
+  };
+  const featRows = packLanes(
+    con.features.filter(isAnno).map(f => ({ f })),
+    it => barExtent(it.f.start, it.f.end, it.f.name, LBL, 2.5), 8);
+  const miscRows = packLanes(
+    con.features.filter(f => !isAnno(f)).map(f => ({ f })),
+    it => barExtent(it.f.start, it.f.end, it.f.name, 5.2, 2), 6);
+  const pepRows = packLanes(maps, m => [x(m.ntStart), Math.max(x(m.ntEnd), x(m.ntStart) + 2.5)], 4);
+  const FH = 17, PH = 13, GAP = 4;
+  let y = 26;
+  const yRuler = y; y += 26;
+  const yFeat = y; y += featRows.length * (FH + GAP) + 10;
+  const yMisc = y; y += miscRows.length ? miscRows.length * (11 + 3) + 10 : 0;
+  const yPep = y; y += pepRows.length * (PH + GAP) + 14;
+  const H = y;
+  let s = `<svg class="map" viewBox="0 0 ${W} ${H}" role="img" aria-label="Peptide map of ${esc(con.name)}">`;
+  /* ruler */
+  const step = L > 4000 ? 1000 : L > 1500 ? 250 : L > 600 ? 100 : 50;
+  s += `<line x1="${padL}" y1="${yRuler + 12}" x2="${padL + iw}" y2="${yRuler + 12}" stroke="var(--rule)" stroke-width="1"/>`;
+  const ticks = [1];
+  for (let n = step; n < L - step * 0.4; n += step) ticks.push(n);
+  for (const n of ticks) {
+    s += `<line x1="${x(n).toFixed(1)}" y1="${yRuler + 8}" x2="${x(n).toFixed(1)}" y2="${yRuler + 12}" stroke="var(--rule)"/>`
+      + `<text class="ticklab" x="${x(n).toFixed(1)}" y="${yRuler + 4}" text-anchor="${n === 1 ? "start" : "middle"}">${n}</text>`;
+  }
+  s += `<text class="ticklab" x="${padL + iw}" y="${yRuler + 4}" text-anchor="end">${L} bp</text>`;
+  s += `<text class="lanelab" x="${padL - 8}" y="${yRuler + 15}" text-anchor="end">position</text>`;
+  /* features */
+  featRows.forEach((ln, r) => {
+    const yy = yFeat + r * (FH + GAP);
+    if (r === 0) s += `<text class="lanelab" x="${padL - 8}" y="${yy + 12}" text-anchor="end">annotation</text>`;
+    for (const it of ln) {
+      const f = it.f, x0 = x(f.start), x1 = Math.max(x(f.end), x0 + 2.5), w = x1 - x0;
+      const col = f.color || (LINKER.test(f.name) ? "var(--rule)" : "var(--surface-2)");
+      const tip = 6, arrow = w > 14;
+      const pts = f.strand === -1
+        ? `${x0 + (arrow ? tip : 0)},${yy} ${x1},${yy} ${x1},${yy + FH} ${x0 + (arrow ? tip : 0)},${yy + FH} ${x0},${yy + FH / 2}`
+        : `${x0},${yy} ${x1 - (arrow ? tip : 0)},${yy} ${x1},${yy + FH / 2} ${x1 - (arrow ? tip : 0)},${yy + FH} ${x0},${yy + FH}`;
+      s += `<polygon points="${pts}" fill="${esc(col)}" stroke="rgba(0,0,0,.22)" stroke-width=".8"/>`;
+      if (w > f.name.length * 5.6 + 8)
+        s += `<text class="featlab" x="${(x0 + x1) / 2}" y="${yy + FH / 2 + 3.4}" text-anchor="middle" fill="#14171c">${esc(f.name)}</text>`;
+      else if (w > 22)
+        s += `<text class="featlab" x="${x1 + 4}" y="${yy + FH / 2 + 3.4}">${esc(f.name)}</text>`;
+    }
+  });
+  /* existing misc features */
+  miscRows.forEach((ln, r) => {
+    const yy = yMisc + r * 14;
+    if (r === 0) s += `<text class="lanelab" x="${padL - 8}" y="${yy + 9}" text-anchor="end">existing marks</text>`;
+    for (const it of ln) {
+      const f = it.f, x0 = x(f.start), w = Math.max(x(f.end) - x0, 2);
+      s += `<rect x="${x0.toFixed(1)}" y="${yy}" width="${w.toFixed(1)}" height="8" rx="2" fill="${esc(f.color || "var(--ink-3)")}" opacity=".55"/>`;
+      if (w > f.name.length * 5.2 + 6) s += `<text class="ticklab" x="${(x0 + w / 2).toFixed(1)}" y="${yy + 6.6}" text-anchor="middle">${esc(f.name)}</text>`;
+    }
+  });
+  /* peptides */
+  pepRows.forEach((ln, r) => {
+    const yy = yPep + r * (PH + GAP);
+    if (r === 0) s += `<text class="lanelab" x="${padL - 8}" y="${yy + 10}" text-anchor="end">peptides (${maps.length})</text>`;
+    for (const m of ln) {
+      const x0 = x(m.ntStart), w = Math.max(x(m.ntEnd) - x0, 2.5);
+      s += `<g class="pep${m.selected ? "" : " off"}" data-id="${esc(m._id)}" tabindex="0" role="button" aria-label="${esc(m.pep.seq)}">`
+        + `<rect x="${x0.toFixed(1)}" y="${yy}" width="${w.toFixed(1)}" height="${PH}" rx="2.5" fill="${MARKCOL[m.category]}"`
+        + (m.category === "junction" ? ` stroke-dasharray="3 2"` : "") + `/>`;
+      /* a corner notch marks a sequence that also exists in another protein */
+      if (isMultiProtein(m.pep))
+        s += `<polygon class="multi" points="${(x0 + w).toFixed(1)},${yy} ${(x0 + w).toFixed(1)},${yy + 5.5} ${(x0 + w - 5.5).toFixed(1)},${yy}" fill="var(--surface)" stroke="var(--ink-3)" stroke-width=".7"/>`;
+      if (w > m.pep.seq.length * 5.4 + 6)
+        s += `<text class="featlab" x="${(x0 + w / 2).toFixed(1)}" y="${yy + 9.4}" text-anchor="middle" fill="#fff">${esc(m.pep.seq)}</text>`;
+      s += `</g>`;
+    }
+  });
+  return s + `</svg>`;
+}
+
+function tipHTML(m) {
+  const g = m.pep, prim = m.primary;
+  const rows = [];
+  rows.push(["position", `${m.ntStart}–${m.ntEnd} nt (${m.strand === 1 ? "+" : "−"}, frame ${m.frame})`]);
+  rows.push(["length", `${g.seq.length} aa`]);
+  if (prim) rows.push(["in feature", `${prim.feat.name} aa ${prim.aaFrom}–${prim.aaTo}`]);
+  const others = m.overlaps.filter(o => o !== prim).map(o => `${o.feat.name} aa ${o.aaFrom}–${o.aaTo}`);
+  if (others.length) rows.push(["also spans", others.join("; ")]);
+  if (g.psms) rows.push(["PSMs", String(g.psms)]);
+  if (g.abundance) rows.push(["abundance", fmtNum(g.abundance)]);
+  if (g.conf.size) rows.push(["confidence", [...g.conf].join(", ")]);
+  if (g.xcorr) rows.push(["XCorr", String(g.xcorr)]);
+  if (g.q !== null) rows.push(["q-value", String(g.q)]);
+  if (g.rt !== null) rows.push(["apex RT", g.rt + " min"]);
+  if (protCount(g)) rows.push(["maps to", protCount(g) === 1 ? "1 protein (unique)" : `${protCount(g)} proteins — shared`]);
+  if (g.accs.size) rows.push(["accessions", [...g.accs].join(", ")]);
+  if (g.mods.size) rows.push(["modifications", [...g.mods].join("; ")]);
+  if (g.n > 1) rows.push(["export rows", String(g.n)]);
+  if (m.nHits > 1) rows.push(["note", `sequence occurs ${m.nHits}× in this construct`]);
+  if (g.proteins.size) rows.push(["protein", [...g.proteins][0]]);
+  rows.push(["in exports", m.selected ? "included" : "excluded"]);
+  const pill = m.category === "junction" ? '<span class="pill junc">spans junction</span>'
+    : m.category === "minigene" ? '<span class="pill mini">minigene</span>'
+      : m.category === "reporter" ? '<span class="pill rep">reporter / 2A</span>' : '<span class="pill rep">unassigned</span>';
+  return `<span class="tseq">${esc(g.seq)}</span>${pill}<dl>` +
+    rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") + `</dl>`;
+}
+
+function renderResult(res, idx) {
+  const { con, maps, unmatched, coverage } = res;
+  const uniq = new Set(maps.map(m => m.pep.seq)).size;
+  const junc = maps.filter(m => m.category === "junction").length;
+  const rep = maps.filter(m => m.category === "reporter").length;
+  const payloadFeats = coverage.filter(c => !c.isReporter && !c.isSelfCleave);
+  const dead = payloadFeats.filter(c => c.nPep === 0);
+  let h = `<section class="card">
+    <div class="chead"><h2>${esc(con.name)}${res.isExample ? ' <span class="ex">example</span>' : ""}</h2>
+      <div class="meta"><span>${con.seq.length} bp</span><span>${con.circular ? "circular" : "linear"}</span>
+      <span>${con.features.length} features</span><span>${esc(con.source)}</span></div></div>
+    <div class="stats">
+      <div class="stat"><div class="k">peptides placed</div><div class="v">${uniq}<small> / ${res.offered}</small></div></div>
+      <div class="stat"><div class="k">in minigenes</div><div class="v">${maps.filter(m => m.category === "minigene").length}</div></div>
+      <div class="stat"><div class="k">junction-spanning</div><div class="v">${junc}</div></div>
+      <div class="stat"><div class="k">reporter / 2A</div><div class="v">${rep}</div></div>
+      <div class="stat"><div class="k">minigenes covered</div><div class="v">${payloadFeats.length - dead.length}<small> / ${payloadFeats.length}</small></div></div>
+      <div class="stat sel"><div class="k">in exports</div><div class="v"><span id="selcount-${idx}">${maps.length}</span><small> / ${maps.length}</small></div></div>
+    </div>
+    <div class="mapbox">${renderMap(res, idx)}</div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--accent)"></i>within one minigene</span>
+      <span><i class="sw" style="background:var(--warn)"></i>spans a junction / linker</span>
+      <span><i class="sw" style="background:var(--muted-mark)"></i>reporter or 2A peptide</span>
+      <span><i class="sw notch"></i>also found in another protein</span>
+      <span>Hover or focus a peptide bar for its details. Faded bars are excluded from exports.</span>
+    </div>`;
+  if (dead.length) h += `<p class="nocov">No peptide detected for: ${dead.map(c => "<b>" + esc(c.feat.name) + "</b>").join(", ")}</p>`;
+  /* group toggles */
+  h += `<div class="groups" data-card="${idx}">
+    <h3>Include in exports</h3>
+    <label class="gchk"><input type="checkbox" class="grp" data-card="${idx}" data-cat="__all"><span>All (<b id="cnt-${idx}-__all">0</b>)</span></label>`;
+  for (const [cat, label] of CATS) {
+    const n = maps.filter(m => m.category === cat).length;
+    if (!n) continue;
+    h += `<label class="gchk"><input type="checkbox" class="grp" data-card="${idx}" data-cat="${cat}">
+      <span><i class="sw" style="background:${MARKCOL[cat]}"></i>${esc(label)} (<b id="cnt-${idx}-${cat}">0</b>/${n})</span></label>`;
+  }
+  const nSingle = maps.filter(m => isSingleProtein(m.pep)).length;
+  const nMulti = maps.filter(m => isMultiProtein(m.pep)).length;
+  if (nSingle || nMulti) {
+    h += `<span class="gsep"></span><h3>By protein mapping</h3>`;
+    if (nSingle) h += `<label class="gchk"><input type="checkbox" class="grp" data-card="${idx}" data-cat="__single">
+      <span>Single protein (<b id="cnt-${idx}-__single">0</b>/${nSingle})</span></label>`;
+    if (nMulti) h += `<label class="gchk"><input type="checkbox" class="grp" data-card="${idx}" data-cat="__multi">
+      <span>Multiple proteins (<b id="cnt-${idx}-__multi">0</b>/${nMulti})</span></label>`;
+    h += `<button type="button" class="mini-btn" data-only="${idx}">Keep single-protein only</button>`;
+  }
+  h += `</div>`;
+  h += `<div class="tscroll"><table><thead><tr>
+      <th class="cbh"><span class="vh">Include</span></th>
+      <th>Peptide</th><th>Len</th><th>nt range</th><th>Str</th><th>Feature</th><th>aa in feature</th>
+      <th>Class</th><th>Proteins</th><th>PSMs</th><th>Abundance</th><th>Conf.</th><th>Modifications</th></tr></thead><tbody>`;
+  for (const m of maps) {
+    const p = m.primary;
+    const cls = m.category === "junction" ? "junc" : m.category === "minigene" ? "mini" : "rep";
+    const label = m.category === "junction" ? "junction" : m.category === "minigene" ? "minigene" : m.category === "reporter" ? "reporter" : "—";
+    h += `<tr data-id="${esc(m._id)}" class="${m.selected ? "" : "off"}">
+      <td class="cbc"><input type="checkbox" class="rowchk" data-id="${esc(m._id)}" ${m.selected ? "checked" : ""}
+        aria-label="Include ${esc(m.pep.seq)} in exports"></td>
+      <td class="seq">${esc(m.pep.seq)}</td><td class="num">${m.pep.seq.length}</td>
+      <td class="num">${m.ntStart}–${m.ntEnd}</td><td class="num">${m.strand === 1 ? "+" : "−"}${m.frame}</td>
+      <td>${esc(m.overlaps.filter(o => !LINKER.test(o.feat.name)).map(o => o.feat.name).join(" + ") || "—")}</td>
+      <td class="num">${p ? p.aaFrom + "–" + p.aaTo : "—"}</td>
+      <td><span class="pill ${cls}">${label}</span></td>
+      <td>${protCount(m.pep) ? `<span class="pill ${isSingleProtein(m.pep) ? "one" : "many"}">${protCount(m.pep) === 1 ? "1 protein" : protCount(m.pep) + " proteins"}</span>` : "—"}</td>
+      <td class="num">${m.pep.psms || "—"}</td><td class="num">${fmtNum(m.pep.abundance)}</td>
+      <td>${esc([...m.pep.conf].join(", ") || "—")}</td><td class="seq">${esc([...m.pep.mods].join("; ") || "—")}</td></tr>`;
+  }
+  h += `</tbody></table></div>`;
+  const ru = relevantUnmatched(res);
+  h += `<details><summary>Per-feature coverage (${coverage.length}) and unplaced peptides (${ru.rel.length})</summary>
+    <div class="tscroll"><table><thead><tr><th>Feature</th><th>Type</th><th>nt range</th><th>aa</th>
+    <th>Peptides</th><th>aa covered</th><th>Coverage</th></tr></thead><tbody>`;
+  for (const c of coverage) h += `<tr><td>${esc(c.feat.name)}</td><td>${esc(c.feat.type)}</td>
+    <td class="num">${c.feat.start}–${c.feat.end}</td><td class="num">${c.aaLen}</td>
+    <td class="num">${c.nPep}</td><td class="num">${c.covAA}</td><td class="num">${c.pct}%</td></tr>`;
+  h += `</tbody></table></div>`;
+  if (ru.rel.length) h += `<p class="nocov" style="margin-top:12px">From the same proteins but not found in this construct:
+    ${ru.rel.slice(0, 40).map(u => esc(u.seq)).join(", ")}${ru.rel.length > 40 ? ` … and ${ru.rel.length - 40} more` : ""}</p>`;
+  if (ru.hidden) h += `<p class="nocov" style="margin-top:8px">${ru.hidden.toLocaleString()} further peptides in the export belong to
+    other proteins and are not shown. Use the protein filter to narrow the search.</p>`;
+  h += `</details></section>`;
+  return h;
+}
+
+/* ---------------- exports ---------------- */
+function wrapQual(key, val) {
+  const text = `/${key}="${String(val).replace(/"/g, "''")}"`, ind = " ".repeat(21), out = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    if (line && (line + " " + word).length > 58) { out.push(ind + line); line = word; }
+    else line = line ? line + " " + word : word;
+  }
+  if (line) out.push(ind + line);
+  return out.join("\n");
+}
+function toGenBank(res) {
+  const { con } = res, maps = selectedMaps(res), L = con.seq.length;
+  const d = new Date(), MM = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const date = `${String(d.getDate()).padStart(2, "0")}-${MM[d.getMonth()]}-${d.getFullYear()}`;
+  const locus = (con.name || "CONSTRUCT").replace(/[^\w.-]/g, "_").slice(0, 24);
+  let t = `LOCUS       ${locus.padEnd(24)}${String(L).padStart(6)} bp    DNA     ${con.circular ? "circular" : "linear  "} SYN ${date}\n`;
+  t += `DEFINITION  ${con.name} with ${new Set(maps.map(m => m.pep.seq)).size} mapped peptides.\n`;
+  t += `ACCESSION   .\nVERSION     .\nKEYWORDS    .\nSOURCE      synthetic DNA construct\n  ORGANISM  synthetic DNA construct\n`;
+  t += `COMMENT     Peptide features added by Minigene Peptide Mapper on ${d.toISOString().slice(0, 10)}.\n`;
+  t += `FEATURES             Location/Qualifiers\n`;
+  const loc = f => {
+    const inner = f.segs.length > 1
+      ? `join(${f.segs.map(s => `${s.start}..${s.end}`).join(",")})`
+      : `${f.start}..${f.end}`;
+    return f.strand === -1 ? `complement(${inner})` : inner;
+  };
+  const emit = (key, location, quals) => {
+    t += `     ${key.padEnd(16).slice(0, 16)}${location}\n`;
+    for (const [k, v] of quals) if (v !== "" && v != null) t += wrapQual(k, v) + "\n";
+  };
+  emit("source", `1..${L}`, [["organism", "synthetic DNA construct"], ["mol_type", "other DNA"]]);
+  for (const f of con.features) {
+    const q = [["label", f.name]];
+    if (f.qual.product) q.push(["product", f.qual.product]);
+    if (f.qual.note && !/color:/.test(f.qual.note)) q.push(["note", f.qual.note]);
+    if (f.translation) q.push(["translation", f.translation]);
+    if (f.color) q.push(["note", "color: " + f.color]);
+    emit(f.type, loc(f), q);
+  }
+  const col = { minigene: "#1f6f8b", junction: "#a8572b", reporter: "#8b93a3", unassigned: "#757e8d" };
+  for (const m of maps) {
+    const g = m.pep, p = m.primary, notes = [];
+    notes.push(`identified peptide ${g.seq} (${g.seq.length} aa)`);
+    if (p) notes.push(`maps to ${p.feat.name} aa ${p.aaFrom}-${p.aaTo}`);
+    const sp = m.overlaps.filter(o => o !== p && !LINKER.test(o.feat.name));
+    if (sp.length) notes.push(`also spans ${sp.map(o => o.feat.name + " aa " + o.aaFrom + "-" + o.aaTo).join("; ")}`);
+    if (m.spansJunction) notes.push("WARNING: crosses a construct junction, not a native sequence");
+    if (isMultiProtein(g)) notes.push(`WARNING: sequence also present in ${protCount(g) - 1} other protein(s) in the search database`);
+    else if (isSingleProtein(g)) notes.push("unique to one protein");
+    if (g.psms) notes.push(`PSMs ${g.psms}`);
+    if (g.abundance) notes.push(`abundance ${fmtNum(g.abundance)}`);
+    if (g.conf.size) notes.push(`confidence ${[...g.conf].join("/")}`);
+    if (g.mods.size) notes.push(`modifications ${[...g.mods].join("; ")}`);
+    const q = [["label", "pep " + g.seq], ["note", notes.join("; ")], ["note", "color: " + col[m.category]]];
+    emit("misc_feature", m.strand === -1 ? `complement(${m.ntStart}..${m.ntEnd})` : `${m.ntStart}..${m.ntEnd}`, q);
+  }
+  t += `ORIGIN\n`;
+  const low = con.seq.toLowerCase();
+  for (let i = 0; i < L; i += 60) {
+    let line = String(i + 1).padStart(9);
+    for (let j = i; j < Math.min(i + 60, L); j += 10) line += " " + low.slice(j, Math.min(j + 10, L));
+    t += line + "\n";
+  }
+  return t + "//\n";
+}
+function buildWorkbook(results) {
+  const wb = XLSX.utils.book_new();
+  const head = ["Construct", "Peptide", "Length (aa)", "nt start", "nt end", "Strand", "Frame",
+    "Mapped feature(s)", "Primary feature", "aa start in feature", "aa end in feature",
+    "Spans junction", "Class", "Unique placement", "# Proteins with this sequence", "Protein-unique",
+    "Protein accessions", "Marked as", "# PSMs", "Abundance", "Confidence",
+    "Max XCorr", "Min q-value", "Apex RT (min)", "Modifications", "Source protein", "Export rows", "Annotated as"];
+  const rows = [head];
+  for (const r of results) for (const m of selectedMaps(r)) {
+    const g = m.pep, p = m.primary;
+    const existing = r.con.features.filter(f => !(CODING.test(f.type) || f.translation) &&
+      f.start <= m.ntEnd && f.end >= m.ntStart && Math.abs(f.start - m.ntStart) < 6 && Math.abs(f.end - m.ntEnd) < 6)
+      .map(f => f.name).join("; ");
+    rows.push([r.con.name, g.seq, g.seq.length, m.ntStart, m.ntEnd, m.strand === 1 ? "+" : "-", m.frame,
+      m.overlaps.filter(o => !LINKER.test(o.feat.name)).map(o => o.feat.name).join(" + "),
+      p ? p.feat.name : "", p ? p.aaFrom : "", p ? p.aaTo : "",
+      m.spansJunction ? "YES" : "no", m.category, m.nHits === 1 ? "yes" : `no (${m.nHits}x)`,
+      protCount(g) || "", protCount(g) ? (isSingleProtein(g) ? "yes" : "no") : "", [...g.accs].join("; "),
+      [...g.marks].join(";"), g.psms || "", g.abundance || "", [...g.conf].join(", "), g.xcorr || "", g.q ?? "", g.rt ?? "",
+      [...g.mods].join("; "), [...g.proteins].join(" | "), g.n, existing]);
+  }
+  const ws1 = XLSX.utils.aoa_to_sheet(rows);
+  ws1["!cols"] = head.map((h, i) => ({ wch: i === 1 ? 34 : i === 7 ? 30 : Math.max(10, Math.min(26, h.length + 3)) }));
+  ws1["!freeze"] = { xSplit: 0, ySplit: 1 };
+  XLSX.utils.book_append_sheet(wb, ws1, "Peptide mapping");
+
+  const ch = [["Construct", "Feature", "Type", "nt start", "nt end", "aa length", "Unique peptides",
+    "aa covered", "Coverage %", "Role", "Peptides"]];
+  for (const r of results) for (const c of computeCoverage(r.coding, selectedMaps(r)))
+    ch.push([r.con.name, c.feat.name, c.feat.type, c.feat.start, c.feat.end, c.aaLen, c.nPep, c.covAA, c.pct,
+      c.isReporter ? "reporter" : c.isSelfCleave ? "2A peptide" : "minigene",
+      [...new Set(c.peptides.map(m => m.pep.seq))].join(", ")]);
+  const ws2 = XLSX.utils.aoa_to_sheet(ch);
+  ws2["!cols"] = [{ wch: 20 }, { wch: 24 }, { wch: 13 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 15 }, { wch: 11 }, { wch: 11 }, { wch: 12 }, { wch: 60 }];
+  XLSX.utils.book_append_sheet(wb, ws2, "Feature coverage");
+
+  const uh = [["Peptide", "Length (aa)", "Marked as", "# PSMs", "Abundance", "Confidence", "Modifications", "Source protein", "Constructs searched"]];
+  const names = results.map(r => r.con.name).join(" | ");
+  const everywhere = new Map();
+  for (const r of results) for (const u of relevantUnmatched(r).rel) {
+    if (results.every(rr => rr.unmatched.some(x => x.seq === u.seq))) everywhere.set(u.seq, u);
+  }
+  for (const u of everywhere.values())
+    uh.push([u.seq, u.seq.length, [...u.marks].join(";"), u.psms || "", u.abundance || "", [...u.conf].join(", "), [...u.mods].join("; "), [...u.proteins].join(" | "), names]);
+  const ws3 = XLSX.utils.aoa_to_sheet(uh);
+  ws3["!cols"] = [{ wch: 34 }, { wch: 11 }, { wch: 14 }, { wch: 9 }, { wch: 14 }, { wch: 12 }, { wch: 30 }, { wch: 40 }, { wch: 30 }];
+  XLSX.utils.book_append_sheet(wb, ws3, "Unplaced peptides");
+  return wb;
+}
+
+/* ---------------- file delivery (artifact capability or local) ---------------- */
+let DL = null, dlReady = false;
+(async () => { try { DL = await window.claude?.use?.("downloads") ?? null; } catch { DL = null; } dlReady = true; })();
+async function deliver(filename, data, mime) {
+  if (DL) {
+    const okExt = /\.(xlsx|csv|txt|json|md|zip|html|pdf|svg)$/i.test(filename);
+    if (okExt) { await DL.save({ filename, data }); return; }
+    const zip = storeZip([{ name: filename, data: typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data) }]);
+    await DL.save({ filename: filename.replace(/\.[^.]+$/, "") + ".zip", data: zip });
+    return;
+  }
+  const blob = data instanceof Blob ? data : new Blob([data], { type: mime || "application/octet-stream" });
+  const url = URL.createObjectURL(blob), a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+/* minimal stored (uncompressed) ZIP writer */
+function crc32(buf) {
+  let c, t = crc32.t;
+  if (!t) { t = crc32.t = new Int32Array(256); for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } }
+  let crc = -1;
+  for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ t[(crc ^ buf[i]) & 0xFF];
+  return (crc ^ -1) >>> 0;
+}
+function storeZip(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const nameB = enc.encode(f.name), crc = crc32(f.data), n = f.data.length;
+    const lh = new Uint8Array(30 + nameB.length), dv = new DataView(lh.buffer);
+    dv.setUint32(0, 0x04034b50, true); dv.setUint16(4, 20, true); dv.setUint16(6, 0, true);
+    dv.setUint16(8, 0, true); dv.setUint16(10, 0, true); dv.setUint16(12, 0, true);
+    dv.setUint32(14, crc, true); dv.setUint32(18, n, true); dv.setUint32(22, n, true);
+    dv.setUint16(26, nameB.length, true); dv.setUint16(28, 0, true);
+    lh.set(nameB, 30);
+    parts.push(lh, f.data);
+    const ch = new Uint8Array(46 + nameB.length), cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, n, true); cv.setUint32(24, n, true);
+    cv.setUint16(28, nameB.length, true); cv.setUint32(42, offset, true);
+    ch.set(nameB, 46);
+    central.push(ch);
+    offset += lh.length + n;
+  }
+  const cdSize = central.reduce((a, b) => a + b.length, 0);
+  const eocd = new Uint8Array(22), ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+  const total = parts.reduce((a, b) => a + b.length, 0) + cdSize + 22, out = new Uint8Array(total);
+  let o = 0;
+  for (const p of [...parts, ...central, eocd]) { out.set(p, o); o += p.length; }
+  return out;
+}
+
+/* ---------------- app state ---------------- */
+const $ = id => document.getElementById(id);
+let PEPS = [], CONSTRUCTS = [], RESULTS = [], usingExample = true;
+
+function setStatus(msg, err) { const s = $("st"); s.textContent = msg; s.classList.toggle("err", !!err); }
+function refreshButtons() {
+  $("go").disabled = !(PEPS.length && CONSTRUCTS.length);
+  const has = RESULTS.length && !usingExample && totalSelected() > 0;
+  $("dl-gb").disabled = !has; $("dl-xl").disabled = !has;
+}
+async function readFile(file, as) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onerror = () => rej(new Error("could not read " + file.name));
+    r.onload = () => res(r.result);
+    as === "buf" ? r.readAsArrayBuffer(file) : r.readAsText(file);
+  });
+}
+async function loadPeptideFile(file) {
+  const lower = file.name.toLowerCase();
+  let rows;
+  if (/\.(csv|tsv|txt)$/.test(lower)) {
+    const text = await readFile(file, "text");
+    const wb = XLSX.read(text, { type: "string", raw: true });
+    rows = [];
+    for (const n of wb.SheetNames) rows = rows.concat(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }));
+  } else {
+    const wb = XLSX.read(await readFile(file, "buf"), { type: "array" });
+    rows = [];
+    for (const n of wb.SheetNames) rows = rows.concat(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }));
+  }
+  const parsed = parsePeptideRows(rows);
+  if (!parsed.length) throw new Error(`no peptide column found in ${file.name} — expected a header cell named "Annotated Sequence", "Sequence" or "Peptide"`);
+  return aggregate(parsed);
+}
+async function loadConstructFile(file) {
+  const lower = file.name.toLowerCase();
+  if (/\.dna$/.test(lower)) return parseDNA(await readFile(file, "buf"), file.name);
+  return parseGB(await readFile(file, "text"), file.name);
+}
+function scopePeptides() {
+  const q = $("filt").value.trim().toLowerCase();
+  const mode = $("scope").value;
+  const minLen = Math.max(4, Math.min(40, parseInt($("minlen").value, 10) || 7));
+  let short = 0, filtered = 0, offScope = 0;
+  const kept = PEPS.filter(p => {
+    if (mode === "target" && !isTarget(p)) { offScope++; return false; }
+    if (mode === "unique" && !isTargetOnly(p)) { offScope++; return false; }
+    if (q && !p.protText.includes(q)) { filtered++; return false; }
+    if (p.seq.length < minLen) { short++; return false; }
+    return true;
+  });
+  return { kept, short, filtered, offScope, minLen, q, mode };
+}
+/* How many peptides each scope would keep — drives the default and the hint. */
+function scopeCounts() {
+  let target = 0, unique = 0;
+  for (const p of PEPS) { if (isTarget(p)) { target++; if (isTargetOnly(p)) unique++; } }
+  return { all: PEPS.length, target, unique };
+}
+function applyScopeAvailability() {
+  const c = scopeCounts(), sel = $("scope"), note = $("scope-note");
+  const opts = sel.options;
+  opts[0].textContent = `Targets only — from the construct database (${c.target.toLocaleString()})`;
+  opts[1].textContent = `Targets only, excluding sequences shared with the host proteome (${c.unique.toLocaleString()})`;
+  opts[2].textContent = `Every peptide in the export (${c.all.toLocaleString()})`;
+  const marked = c.target > 0;
+  opts[0].disabled = opts[1].disabled = !marked;
+  if (!marked) {
+    sel.value = "all";
+    note.textContent = PEPS.length
+      ? "No “Marked as” column found, so targets cannot be told apart — use the protein filter instead."
+      : "";
+  } else {
+    sel.value = "target";
+    note.textContent = `${(c.target - c.unique).toLocaleString()} of the ${c.target.toLocaleString()} target peptides also occur in a host protein.`;
+  }
+}
+function run() {
+  const sc = scopePeptides();
+  if (!sc.kept.length) {
+    setStatus(sc.q ? `No peptides matched “${sc.q}”. Clear the filter or check the protein names in the export.`
+      : "No peptides left after the length cutoff.", true);
+    return;
+  }
+  RESULTS = CONSTRUCTS.map(c => Object.assign(mapPeptides(c, sc.kept), { offered: sc.kept.length, scope: sc }));
+  usingExample = false;
+  draw();
+  const placed = new Set();
+  for (const r of RESULTS) for (const m of r.maps) placed.add(m.pep.seq);
+  const bits = [`${placed.size} of ${sc.kept.length} searched peptide sequences placed across ${RESULTS.length} construct${RESULTS.length > 1 ? "s" : ""}`];
+  if (sc.offScope) bits.push(`${sc.offScope.toLocaleString()} outside the chosen scope`);
+  if (sc.filtered) bits.push(`${sc.filtered.toLocaleString()} skipped by the protein filter`);
+  if (sc.short) bits.push(`${sc.short.toLocaleString()} below ${sc.minLen} aa`);
+  setStatus(bits.join(" · ") + ".");
+  refreshButtons();
+}
+/* Stable ids, and a default of everything included. */
+function markIds() {
+  RESULTS.forEach((r, i) => r.maps.forEach((m, j) => {
+    m._id = `p${i}-${j}`;
+    if (m.selected === undefined) m.selected = true;
+  }));
+}
+function draw() {
+  markIds();
+  $("out").innerHTML = RESULTS.map((r, i) => renderResult(r, i)).join("");
+  wireHover(); wireSelection();
+  RESULTS.forEach((r, i) => syncSelection(i));
+}
+/* Update the card in place — re-rendering would lose scroll position and focus. */
+function syncSelection(i) {
+  const r = RESULTS[i], root = document.querySelector(`.groups[data-card="${i}"]`);
+  if (!root) return;
+  for (const m of r.maps) {
+    const row = document.querySelector(`tr[data-id="${CSS.escape(m._id)}"]`);
+    const box = document.querySelector(`.rowchk[data-id="${CSS.escape(m._id)}"]`);
+    const g = document.querySelector(`g.pep[data-id="${CSS.escape(m._id)}"]`);
+    if (box) box.checked = m.selected;
+    if (row) row.classList.toggle("off", !m.selected);
+    if (g) g.classList.toggle("off", !m.selected);
+  }
+  const setGroup = (cat, pool) => {
+    const box = root.querySelector(`.grp[data-cat="${cat}"]`);
+    const cnt = document.getElementById(`cnt-${i}-${cat}`);
+    if (!box) return;
+    const on = pool.filter(m => m.selected).length;
+    box.checked = pool.length > 0 && on === pool.length;
+    box.indeterminate = on > 0 && on < pool.length;
+    if (cnt) cnt.textContent = on;
+  };
+  for (const [cat] of CATS) setGroup(cat, r.maps.filter(m => m.category === cat));
+  setGroup("__single", r.maps.filter(m => isSingleProtein(m.pep)));
+  setGroup("__multi", r.maps.filter(m => isMultiProtein(m.pep)));
+  setGroup("__all", r.maps);
+  const sc = document.getElementById(`selcount-${i}`);
+  if (sc) sc.textContent = r.maps.filter(m => m.selected).length;
+  refreshButtons();
+}
+function wireSelection() {
+  for (const box of document.querySelectorAll(".rowchk")) {
+    box.addEventListener("change", () => {
+      const [ci] = box.dataset.id.slice(1).split("-").map(Number);
+      const m = RESULTS[ci]?.maps.find(x => x._id === box.dataset.id);
+      if (m) { m.selected = box.checked; syncSelection(ci); }
+    });
+  }
+  for (const box of document.querySelectorAll(".grp")) {
+    box.addEventListener("change", () => {
+      const ci = +box.dataset.card, cat = box.dataset.cat, on = box.checked;
+      const inGroup = m => cat === "__all" || (cat === "__single" ? isSingleProtein(m.pep)
+        : cat === "__multi" ? isMultiProtein(m.pep) : m.category === cat);
+      for (const m of RESULTS[ci].maps) if (inGroup(m)) m.selected = on;
+      syncSelection(ci);
+    });
+  }
+  for (const btn of document.querySelectorAll(".mini-btn[data-only]")) {
+    btn.addEventListener("click", () => {
+      const ci = +btn.dataset.only;
+      for (const m of RESULTS[ci].maps) m.selected = isSingleProtein(m.pep);
+      syncSelection(ci);
+    });
+  }
+}
+const totalSelected = () => RESULTS.reduce((a, r) => a + r.maps.filter(m => m.selected).length, 0);
+/* hover + keyboard details */
+function wireHover() {
+  const tip = $("tip");
+  const index = new Map();
+  RESULTS.forEach(r => r.maps.forEach(m => index.set(m._id, m)));
+  const show = (el, evt) => {
+    const m = index.get(el.dataset.id);
+    if (!m) return;
+    tip.innerHTML = tipHTML(m);
+    tip.classList.add("on"); tip.setAttribute("aria-hidden", "false");
+    const r = el.getBoundingClientRect();
+    const px = evt ? evt.clientX : r.left + r.width / 2, py = evt ? evt.clientY : r.top;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.max(8, Math.min(innerWidth - w - 8, px + 14)) + "px";
+    tip.style.top = (py - h - 12 < 8 ? py + 18 : py - h - 12) + "px";
+    document.querySelectorAll(".pep.sel,tr.sel").forEach(x => x.classList.remove("sel"));
+    document.querySelectorAll(`[data-id="${CSS.escape(el.dataset.id)}"]`).forEach(x => x.classList.add("sel"));
+  };
+  const hide = () => {
+    tip.classList.remove("on"); tip.setAttribute("aria-hidden", "true");
+    document.querySelectorAll(".pep.sel,tr.sel").forEach(x => x.classList.remove("sel"));
+  };
+  for (const el of document.querySelectorAll(".pep,tbody tr[data-id]")) {
+    el.addEventListener("mouseenter", e => show(el, e));
+    el.addEventListener("mousemove", e => { if (tip.classList.contains("on")) show(el, e); });
+    el.addEventListener("mouseleave", hide);
+    el.addEventListener("focus", () => show(el, null));
+    el.addEventListener("blur", hide);
+  }
+}
+
+/* ---------------- example data ---------------- */
+function exampleConstruct() {
+  const mini = [
+    { name: "GENE1 R120W", aa: "MGSLADKVLWQTFSELPKNVTYEDAR" },
+    { name: "GENE2 S44F", aa: "ATLQEFVSKPGDLIYNRTAEMVQDLK" },
+    { name: "GENE3 P88L", aa: "SVFDHLTGQKAELYPNVMSSREDAIK" }
+  ];
+  const back = { name: "P2A", aa: "ATNFSLLKQAGDVEENPGP" }, rep = { name: "EGFP", aa: "MVSKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGK" };
+  const rc = { A: "GCC", R: "CGC", N: "AAC", D: "GAC", C: "TGC", Q: "CAG", E: "GAG", G: "GGC", H: "CAC", I: "ATC", L: "CTG", K: "AAG", M: "ATG", F: "TTC", P: "CCC", S: "AGC", T: "ACC", W: "TGG", Y: "TAC", V: "GTG" };
+  const dna = aa => [...aa].map(c => rc[c] || "NNN").join("");
+  let seq = "", feats = [], pos = 1;
+  const cols = ["#f58231", "#4363d8", "#e6194b"];
+  mini.forEach((m, i) => {
+    const d = dna(m.aa); seq += d;
+    feats.push({ name: m.name, type: "CDS", strand: 1, start: pos, end: pos + d.length - 1, segs: [{ start: pos, end: pos + d.length - 1, color: cols[i] }], color: cols[i], qual: {}, translation: m.aa });
+    pos += d.length;
+    if (i < mini.length - 1) {
+      const lk = "GCCGCCTAC"; seq += lk;
+      feats.push({ name: "AAY linker", type: "misc_feature", strand: 1, start: pos, end: pos + 8, segs: [{ start: pos, end: pos + 8, color: "#a6acb3" }], color: "#a6acb3", qual: {}, translation: "" });
+      pos += 9;
+    }
+  });
+  for (const part of [back, rep]) {
+    const d = dna(part.aa); seq += d;
+    const col = part.name === "P2A" ? "#cc99b2" : "#05fc14";
+    feats.push({ name: part.name, type: "CDS", strand: 1, start: pos, end: pos + d.length - 1, segs: [{ start: pos, end: pos + d.length - 1, color: col }], color: col, qual: {}, translation: part.aa });
+    pos += d.length;
+  }
+  return { name: "EXAMPLE minigene construct", seq, circular: false, features: feats, source: "built-in example" };
+}
+function loadExample() {
+  const con = exampleConstruct();
+  const mk = (seq, psms, ab, conf, mods, mark, nProt) => ({
+    seq, n: 1, psms, abundance: ab, conf: new Set([conf]), mods: new Set(mods ? [mods] : []),
+    proteins: new Set([mark === "HUMAN" ? "EXAMPLE-host protein" : "EXAMPLE-target"]),
+    protText: (mark || "TARGET").toLowerCase(), marks: new Set((mark || "TARGET").split(";")),
+    nProt: nProt || 1, accs: new Set(["EXAMPLE-construct"]),
+    xcorr: 3.1, q: 0.0001, rt: 42.5, rows: []
+  });
+  PEPS = [
+    mk("VLWQTFSELPK", 7, 4.1e7, "High"),
+    mk("NVTYEDARAAYATLQEFVSK", 2, 3.3e6, "High"),
+    mk("PGDLIYNRTAEMVQDLK", 5, 1.9e7, "High", "1xDeamidated [N8]"),
+    mk("SVFDHLTGQK", 9, 6.2e7, "High"),
+    mk("AELYPNVMSSREDAIK", 3, 8.8e6, "Medium", "", "TARGET;HUMAN", 2),
+    mk("GEELFTGVVPILVELDGDVNGHK", 11, 9.4e7, "High"),
+    mk("QAGDVEENPGPMVSK", 1, 1.2e6, "High"),
+    mk("LLNDPQTFVSAGHIK", 2, 2.4e6, "High", "", "HUMAN")
+  ];
+  CONSTRUCTS = [con];
+  applyScopeAvailability();
+  const sc = scopePeptides();
+  RESULTS = [Object.assign(mapPeptides(con, sc.kept), { offered: sc.kept.length, scope: sc, isExample: true })];
+  usingExample = true;
+  draw(); refreshButtons();
+}
+
+/* ---------------- wiring ---------------- */
+$("f-xl").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    setStatus("Reading " + f.name + " …");
+    PEPS = await loadPeptideFile(f);
+    applyScopeAvailability();
+    const c = scopeCounts();
+    $("n-xl").textContent = `${f.name} — ${PEPS.length.toLocaleString()} unique peptides`;
+    setStatus(c.target
+      ? `${PEPS.length.toLocaleString()} unique peptides read from ${f.name}; ${c.target.toLocaleString()} are from the construct database and will be mapped.`
+      : `${PEPS.length.toLocaleString()} unique peptide sequences read from ${f.name}.`);
+  } catch (err) { PEPS = []; applyScopeAvailability(); $("n-xl").textContent = ""; setStatus(err.message, true); }
+  refreshButtons();
+});
+$("f-sq").addEventListener("change", async e => {
+  const files = [...e.target.files].slice(0, 4); if (!files.length) return;
+  CONSTRUCTS = []; const names = [], errs = [];
+  for (const f of files) {
+    try { const c = await loadConstructFile(f); CONSTRUCTS.push(c); names.push(`${f.name} — ${c.name}, ${c.seq.length} bp, ${c.features.length} features`); }
+    catch (err) { errs.push(`${f.name}: ${err.message}`); }
+  }
+  $("n-sq").innerHTML = names.map(n => `<span>${esc(n)}</span>`).join("");
+  setStatus(errs.length ? errs.join(" · ") : `${CONSTRUCTS.length} construct${CONSTRUCTS.length > 1 ? "s" : ""} loaded.`, !!errs.length);
+  refreshButtons();
+});
+for (const [dz, input] of [["dz-xl", "f-xl"], ["dz-sq", "f-sq"]]) {
+  const el = $(dz);
+  el.addEventListener("dragover", e => { e.preventDefault(); el.classList.add("hot"); });
+  el.addEventListener("dragleave", () => el.classList.remove("hot"));
+  el.addEventListener("drop", e => {
+    e.preventDefault(); el.classList.remove("hot");
+    const dt = new DataTransfer();
+    for (const f of e.dataTransfer.files) dt.items.add(f);
+    $(input).files = dt.files;
+    $(input).dispatchEvent(new Event("change"));
+  });
+}
+$("go").addEventListener("click", () => { try { run(); } catch (err) { setStatus("Mapping failed: " + err.message, true); } });
+$("demo").addEventListener("click", () => { loadExample(); setStatus("Example data shown. Load your own files to replace it."); });
+for (const id of ["scope", "minlen", "filt"]) $(id).addEventListener("change", () => {
+  if (usingExample) { loadExample(); return; }
+  if (PEPS.length && CONSTRUCTS.length) run();
+});
+$("dl-gb").addEventListener("click", async () => {
+  try {
+    if (RESULTS.length === 1) {
+      const r = RESULTS[0];
+      await deliver(`${r.con.name.replace(/[^\w.-]/g, "_")}_peptides.gb`, toGenBank(r), "chemical/seq-na-genbank");
+    } else {
+      const files = RESULTS.map(r => ({ name: `${r.con.name.replace(/[^\w.-]/g, "_")}_peptides.gb`, data: new TextEncoder().encode(toGenBank(r)) }));
+      const zip = storeZip(files);
+      if (DL) await DL.save({ filename: "annotated_constructs.zip", data: zip });
+      else await deliver("annotated_constructs.zip", new Blob([zip], { type: "application/zip" }));
+    }
+    setStatus(`Annotated sequence file ready with ${totalSelected()} peptide${totalSelected() === 1 ? "" : "s"}. Open it in SnapGene with File ▸ Open; peptides appear as misc_features named “pep …”.`);
+  } catch (err) { setStatus(err?.code === "declined" ? "Save cancelled." : "Could not save: " + (err.message || err.code), err?.code !== "declined"); }
+});
+$("dl-xl").addEventListener("click", async () => {
+  try {
+    const wb = buildWorkbook(RESULTS);
+    const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    await deliver("peptide_mapping.xlsx", new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    setStatus(`Workbook ready with ${totalSelected()} selected peptide${totalSelected() === 1 ? "" : "s"}: peptide mapping, per-feature coverage, and unplaced peptides.`);
+  } catch (err) { setStatus(err?.code === "declined" ? "Save cancelled." : "Could not save: " + (err.message || err.code), err?.code !== "declined"); }
+});
+loadExample();
+</script>
