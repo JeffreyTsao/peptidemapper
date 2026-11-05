@@ -189,13 +189,13 @@
 
   <div class="intake">
     <div class="drop" id="dz-xl">
-      <label for="f-xl">1 · Peptide export</label>
-      <input type="file" id="f-xl" accept=".xlsx,.xlsm,.xls,.csv,.tsv,.txt">
-      <span class="hint">Proteome Discoverer .xlsx (nested or flat), or CSV/TSV</span>
+      <label for="f-xl">1 · Peptide exports (1–50)</label>
+      <input type="file" id="f-xl" accept=".xlsx,.xlsm,.xls,.csv,.tsv,.txt" multiple>
+      <span class="hint">Proteome Discoverer .xlsx (nested or flat), or CSV/TSV — several runs are pooled</span>
       <span class="files" id="n-xl"></span>
     </div>
     <div class="drop" id="dz-sq">
-      <label for="f-sq">2 · Construct files (1–4)</label>
+      <label for="f-sq">2 · Construct files (1–10)</label>
       <input type="file" id="f-sq" accept=".dna,.gb,.gbk,.genbank,.ape" multiple>
       <span class="hint">SnapGene .dna, or GenBank .gb / .gbk</span>
       <span class="files" id="n-sq"></span>
@@ -358,7 +358,7 @@ const PEPRE = /^(\[?[A-Za-z-]*\]?\.)?[A-Za-z]{4,}(\.\[?[A-Za-z-]*\]?)?$/;
    export the protein and peptide tables are offset by one column, so a protein
    row whose "Master" reads None lands that word under Annotated Sequence. */
 const NOTPEP = /^(NONE|MASTER|HIGH|MEDIUM|LOW|TRUE|FALSE|CHECKED|PROTEIN|SEQUENCE|PEPTIDE)$/i;
-function parsePeptideRows(rows) {
+function parsePeptideRows(rows, srcFile) {
   const peps = []; let pHdr = null, pIdx = -1, protHdr = null, pAcc = -1, pDesc = -1, pMark = -1, prot = null;
   const findPepCol = r => {
     for (let c = 0; c < r.length; c++) if (PEPKEYS.includes(norm(r[c]))) return c;
@@ -385,7 +385,7 @@ function parsePeptideRows(rows) {
       && (!indented || String(r[0] ?? "").trim() === "")) {
       const pep = stripPep(r[pIdx].trim());
       if (pep.length < 4) continue;
-      const rec = { seq: pep, raw: r[pIdx].trim(), fields: {}, protein: prot };
+      const rec = { seq: pep, raw: r[pIdx].trim(), fields: {}, protein: prot, file: srcFile || "" };
       for (let c = 0; c < pHdr.length; c++) if (pHdr[c] && r[c] !== undefined && r[c] !== null && r[c] !== "") rec.fields[pHdr[c]] = r[c];
       peps.push(rec);
       continue;
@@ -444,8 +444,15 @@ function aggregate(rows) {
   const m = new Map();
   for (const r of rows) {
     let g = m.get(r.seq);
-    if (!g) { g = { seq: r.seq, n: 0, psms: 0, abundance: 0, conf: new Set(), mods: new Set(), proteins: new Set(), protText: "", marks: new Set(), nProt: 0, accs: new Set(), xcorr: 0, q: null, rt: null, rows: [] }; m.set(r.seq, g); }
-    g.n++; g.rows.push(r);
+    /* The raw rows are deliberately not kept. Everything downstream reads the
+       aggregated fields below, and holding every row of every export pinned
+       its `fields` map in memory — roughly 10k rows per file, which at 50
+       files was hundreds of megabytes of ballast. */
+    if (!g) { g = { seq: r.seq, n: 0, psms: 0, abundance: 0, conf: new Set(), mods: new Set(), proteins: new Set(), protText: "", marks: new Set(), nProt: 0, accs: new Set(), xcorr: 0, q: null, rt: null, files: new Set() }; m.set(r.seq, g); }
+    g.n++;
+    /* Which exports this sequence was seen in. With several runs pooled, a
+       peptide found in many of them is better evidence than one seen once. */
+    if (r.file) g.files.add(r.file);
     const psm = pickField(r.fields, ["^# ?PSMs$", "psms"]); if (psm && isFinite(+psm.val)) g.psms += +psm.val;
     const ab = pickField(r.fields, ["^abundance", "intensity", "^area"]); if (ab && isFinite(+ab.val)) g.abundance += +ab.val;
     const cf = pickField(r.fields, ["^confidence$", "^pep confidence"]); if (cf) g.conf.add(String(cf.val));
@@ -484,30 +491,53 @@ const isMultiProtein = g => protCount(g) > 1;
 
 /* ---------------- quality control ----------------
    The host signature is the background that co-purifies in every run of this
-   workflow. It was derived from the P2218 PILOT S1-S3 exports: master proteins
-   not from the construct database, present in all three, ranked by share of
+   workflow. It was derived from the 13 P2250 U948 exports: master proteins not
+   from the construct database, detected in all 13, ranked by mean share of
    total host abundance, with isoform-ambiguous entries (CV > 35% between runs,
-   e.g. swapping tubulin alpha chains) removed. `s` is parts per 10,000 of host
-   signal. Leave-one-out across those three runs: 30/30 detected, median
-   |log2(observed/expected)| 0.15-0.20. Shuffling abundances gives 7.97. */
+   e.g. swapping tubulin beta chains) removed. Expected values are the
+   arithmetic mean across the 13 runs, in parts per 10,000 of host signal; the
+   30 members together account for 29% of host abundance, and their CVs run
+   10-34%.
+
+   Validation. Leave-one-out across the 13: 30/30 detected, median
+   |log2(observed/expected)| 0.16-0.47. Shuffling abundances across all host
+   proteins gives 6.44, so the test is specific rather than an artefact of the
+   abundance distribution.
+
+   Held out as an independent test set, the three P2218 PILOT runs that seeded
+   the previous version of this signature score 30/30 detected but median
+   |log2| 0.53-0.62 — a `warn` under the thresholds below, not a `pass`. The
+   deviation is a systematic shift, not noise: the pilot runs sit uniformly
+   lower (bias -0.29 to -0.45) and the four largest offenders in all three are
+   prohibitin, prohibitin-2, the dolichyl-diphosphooligosaccharide OST subunit
+   and alpha-enolase, each 1.5-2.8 log2 low. The mitochondrial and ER-membrane
+   component of the background genuinely differs between the two experiments,
+   so the thresholds are left alone and a P2218-style prep is expected to read
+   `warn` against a P2250 reference. Re-deriving from a given run with the
+   "save baseline" button remains the way to QC a different prep.
+
+   Note that REPORTER_REFERENCE below is still the pilot-run reporter data and
+   was not rebuilt here. */
 const BUILTIN_SIGNATURE = {
-  name: "P2218 PILOT S1–S3 (n = 3)",
-  proteins: [["P0DOX5", "Immunoglobulin gamma-1 heavy chain", 407.24], ["P68371", "Tubulin beta-4B chain", 283.83],
-  ["P55072", "Transitional endoplasmic reticulum ATPase", 252.67], ["P68104", "Elongation factor 1-alpha 1", 182.47],
-  ["Q14247", "Src substrate cortactin", 164.99], ["P05141", "ADP/ATP translocase 2", 153.93],
-  ["P49750", "YLP motif-containing protein 1", 130.3], ["P11021", "Endoplasmic reticulum chaperone BiP", 120.49],
-  ["P11142", "Heat shock cognate 71 kDa protein", 106.15], ["P0DMV9", "Heat shock 70 kDa protein 1B", 105.37],
-  ["Q06830", "Peroxiredoxin-1", 99.34], ["P60709", "Actin, cytoplasmic 1", 94], ["Q15417", "Calponin-3", 90.96],
-  ["Q14839", "Chromodomain-helicase-DNA-binding protein 4", 87.47],
-  ["Q7KZF4", "Staphylococcal nuclease domain-containing protein 1", 81.95],
-  ["P33992", "DNA replication licensing factor MCM5", 77.65], ["P27824", "Calnexin", 77.08],
-  ["Q9BTE3", "Mini-chromosome maintenance complex-binding protein", 74.18],
-  ["P27816", "Microtubule-associated protein 4", 69], ["Q8NBS9", "Thioredoxin domain-containing protein 5", 67.16],
-  ["O00571", "ATP-dependent RNA helicase DDX3X", 66.64], ["A5YKK6", "CCR4-NOT transcription complex subunit 1", 64.67],
-  ["Q15084", "Protein disulfide-isomerase A6", 60.84], ["P06748", "Nucleophosmin", 55.33],
-  ["P46109", "Crk-like protein", 53.78], ["P07437", "Tubulin beta chain", 51.34],
-  ["Q9UPY3", "Endoribonuclease Dicer", 49.12], ["P49792", "E3 SUMO-protein ligase RanBP2", 49.07],
-  ["P43243", "Matrin-3", 48.98], ["P42166", "Lamina-associated polypeptide 2, isoform alpha", 48.24]]
+  name: "P2250 U948 1–13 (n = 13)",
+  proteins: [["P55072", "Transitional endoplasmic reticulum ATPase", 356.48], ["P68104", "Elongation factor 1-alpha 1", 275.39],
+  ["P11021", "Endoplasmic reticulum chaperone BiP", 266.11], ["P60709", "Actin, cytoplasmic 1", 161.37],
+  ["P05141", "ADP/ATP translocase 2", 149.96], ["P11142", "Heat shock cognate 71 kDa protein", 139.0],
+  ["P0DMV9", "Heat shock 70 kDa protein 1B", 129.55], ["O00571", "ATP-dependent RNA helicase DDX3X", 105.59],
+  ["Q7KZF4", "Staphylococcal nuclease domain-containing protein 1", 103.35],
+  ["P33992", "DNA replication licensing factor MCM5", 87.15], ["P06733", "Alpha-enolase", 84.86],
+  ["P35232", "Prohibitin", 77.02], ["Q13838", "Spliceosome RNA helicase DDX39B", 76.86],
+  ["Q99623", "Prohibitin-2", 74.28], ["Q14247", "Src substrate cortactin", 71.24],
+  ["P04843", "Dolichyl-diphosphooligosaccharide--protein glycosylt", 71.06],
+  ["P25205", "DNA replication licensing factor MCM3", 69.19],
+  ["Q8NBS9", "Thioredoxin domain-containing protein 5", 57.5],
+  ["P49411", "Elongation factor Tu, mitochondrial", 53.1], ["Q15084", "Protein disulfide-isomerase A6", 51.89],
+  ["P26641", "Elongation factor 1-gamma", 51.16], ["P23396", "40S ribosomal protein S3", 49.88],
+  ["Q14839", "Chromodomain-helicase-DNA-binding protein 4", 48.67],
+  ["P49792", "E3 SUMO-protein ligase RanBP2", 45.57], ["P49750", "YLP motif-containing protein 1", 44.67],
+  ["P08865", "40S ribosomal protein SA", 42.99], ["P09651", "Heterogeneous nuclear ribonucleoprotein A1", 40.69],
+  ["P14618", "Pyruvate kinase PKM", 40.65], ["P42166", "Lamina-associated polypeptide 2, isoform alpha", 40.44],
+  ["P27816", "Microtubule-associated protein 4", 40.4]]
 };
 /* Reporter signal seen in the same three runs, as ppm of host abundance. */
 const REPORTER_REFERENCE = [
@@ -672,8 +702,9 @@ function relevantUnmatched(res) {
 
 /* ---------------- QC rendering ---------------- */
 const VERDICT = { pass: ["Pass", "ok"], warn: ["Check", "warn"], fail: ["Fail", "bad"], none: ["Not detected", "neutral"] };
-function renderHostQC(q) {
+function renderHostQC(q, idx, srcName) {
   if (!q) return "";
+  const i = idx === undefined ? 0 : idx;
   const [label, cls] = VERDICT[q.verdict];
   const W = 560, H = 150, pad = 34;
   const vals = q.rows.filter(r => r.obs > 0);
@@ -686,7 +717,7 @@ function renderHostQC(q) {
       fill="${Math.abs(r.dev) > 1 ? "var(--warn)" : "var(--accent)"}" fill-opacity=".8"><title>${esc(r.desc)}: expected ${r.exp.toFixed(1)}, observed ${r.obs.toFixed(1)} per 10,000</title></circle>`;
   const missing = q.rows.filter(r => !r.obs).length;
   return `<section class="card qc">
-    <div class="chead"><h2>Host background check <span class="verdict ${cls}">${label}</span></h2>
+    <div class="chead"><h2>Host background check${srcName ? " — " + esc(srcName) : ""} <span class="verdict ${cls}">${label}</span></h2>
       <div class="meta"><span>${esc(q.sig.name)}</span><span>${q.hostProteins.toLocaleString()} host proteins in this file</span></div></div>
     <p class="sub">${esc(q.note)}</p>
     <div class="stats">
@@ -708,10 +739,42 @@ function renderHostQC(q) {
     `<li><span>${esc(r.desc)}</span><b class="${r.dev > 0 ? "up" : "dn"}">${r.dev > 0 ? "+" : ""}${r.dev.toFixed(1)} log2</b></li>`).join("") + `</ul>`
       : `<p class="sub">Every detected signature protein is within 2× of the reference.</p>`}
         <div class="qcbtns">
-          <button type="button" id="sig-save">Use this file as the baseline</button>
-          <button type="button" id="sig-reset">Restore built-in</button>
+          <button type="button" class="sig-save" data-file="${i}">Use this file as the baseline</button>
+          ${HOSTQCS.length > 1 ? `<button type="button" class="sig-save-all">Use all ${HOSTQCS.length} exports</button>` : ""}
+          <button type="button" class="sig-reset">Restore built-in</button>
         </div>
       </div>
+    </div>
+  </section>`;
+}
+/* With more than a handful of exports loaded, fifty observed-vs-expected plots
+   would bury the mapping results, so the per-file checks collapse to one table
+   and only the files that did not pass keep their full card. */
+const QCSUMMARY_FROM = 5;
+function renderHostSummary(qcs) {
+  const bad = qcs.filter(f => f.qc.verdict !== "pass").length;
+  const worst = qcs.reduce((a, f) => Math.max(a, f.qc.medDev), 0);
+  return `<section class="card qc">
+    <div class="chead"><h2>Host background check — ${qcs.length} exports
+      <span class="verdict ${bad ? "warn" : "ok"}">${bad ? `${bad} to check` : "All pass"}</span></h2>
+      <div class="meta"><span>${esc(qcs[0].qc.sig.name)}</span><span>worst median deviation ${worst.toFixed(2)} log2</span></div></div>
+    <p class="sub">${bad
+      ? `${bad} of ${qcs.length} exports do not match the reference background; each keeps its full card below.`
+      : `Every export matches the reference background.`}</p>
+    <div class="tscroll"><table><thead><tr><th>Export</th><th>Verdict</th><th>Signature detected</th>
+      <th>Median dev (log2)</th><th>Off by &gt;2×</th><th>Host proteins</th><th></th></tr></thead><tbody>`
+    + qcs.map((f, i) => {
+      const [label, cls] = VERDICT[f.qc.verdict];
+      return `<tr><td>${esc(f.name)}</td><td><span class="verdict ${cls}">${label}</span></td>
+        <td>${f.qc.detected} / ${f.qc.n}</td><td>${f.qc.medDev.toFixed(2)}</td>
+        <td>${f.qc.outliers.length}</td><td>${f.qc.hostProteins.toLocaleString()}</td>
+        <td><button type="button" class="mini-btn sig-save" data-file="${i}">baseline</button></td></tr>`;
+    }).join("")
+    + `</tbody></table></div>
+    <div class="qcbtns">
+      <button type="button" class="sig-save-all">Use all ${qcs.length} exports as the baseline</button>
+      <button type="button" class="sig-reset">Restore built-in</button>
+      <button type="button" class="qc-toggle">${SHOWALLQC ? "Collapse to table" : "Show every plot"}</button>
     </div>
   </section>`;
 }
@@ -859,6 +922,7 @@ function tipHTML(m) {
   if (g.accs.size) rows.push(["accessions", [...g.accs].join(", ")]);
   if (g.mods.size) rows.push(["modifications", [...g.mods].join("; ")]);
   if (g.n > 1) rows.push(["export rows", String(g.n)]);
+  if (g.files && g.files.size) rows.push([g.files.size === 1 ? "export file" : `seen in ${g.files.size} exports`, [...g.files].join(", ")]);
   if (m.nHits > 1) rows.push(["note", `sequence occurs ${m.nHits}× in this construct`]);
   if (g.proteins.size) rows.push(["protein", [...g.proteins][0]]);
   rows.push(["in exports", m.selected ? "included" : "excluded"]);
@@ -1028,7 +1092,8 @@ function buildWorkbook(results) {
     "Mapped feature(s)", "Primary feature", "aa start in feature", "aa end in feature",
     "Spans junction", "Class", "Unique placement", "# Proteins with this sequence", "Protein-unique",
     "Protein accessions", "Marked as", "# PSMs", "Abundance", "Confidence",
-    "Max XCorr", "Min q-value", "Apex RT (min)", "Modifications", "Source protein", "Export rows", "Annotated as"];
+    "Max XCorr", "Min q-value", "Apex RT (min)", "Modifications", "Source protein", "Export rows",
+    "# Exports with this peptide", "Export files", "Annotated as"];
   const rows = [head];
   for (const r of results) for (const m of selectedMaps(r)) {
     const g = m.pep, p = m.primary;
@@ -1041,7 +1106,8 @@ function buildWorkbook(results) {
       m.spansJunction ? "YES" : "no", m.category, m.nHits === 1 ? "yes" : `no (${m.nHits}x)`,
       protCount(g) || "", protCount(g) ? (isSingleProtein(g) ? "yes" : "no") : "", [...g.accs].join("; "),
       [...g.marks].join(";"), g.psms || "", g.abundance || "", [...g.conf].join(", "), g.xcorr || "", g.q ?? "", g.rt ?? "",
-      [...g.mods].join("; "), [...g.proteins].join(" | "), g.n, existing]);
+      [...g.mods].join("; "), [...g.proteins].join(" | "), g.n,
+      g.files ? g.files.size : "", g.files ? [...g.files].join("; ") : "", existing]);
   }
   const ws1 = XLSX.utils.aoa_to_sheet(rows);
   ws1["!cols"] = head.map((h, i) => ({ wch: i === 1 ? 34 : i === 7 ? 30 : Math.max(10, Math.min(26, h.length + 3)) }));
@@ -1058,28 +1124,30 @@ function buildWorkbook(results) {
   ws2["!cols"] = [{ wch: 20 }, { wch: 24 }, { wch: 13 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 15 }, { wch: 11 }, { wch: 11 }, { wch: 12 }, { wch: 60 }];
   XLSX.utils.book_append_sheet(wb, ws2, "Feature coverage");
 
-  const uh = [["Peptide", "Length (aa)", "Marked as", "# PSMs", "Abundance", "Confidence", "Modifications", "Source protein", "Constructs searched"]];
+  const uh = [["Peptide", "Length (aa)", "Marked as", "# PSMs", "Abundance", "Confidence", "Modifications", "Source protein", "Export files", "Constructs searched"]];
   const names = results.map(r => r.con.name).join(" | ");
   const everywhere = new Map();
   for (const r of results) for (const u of relevantUnmatched(r).rel) {
     if (results.every(rr => rr.unmatched.some(x => x.seq === u.seq))) everywhere.set(u.seq, u);
   }
   for (const u of everywhere.values())
-    uh.push([u.seq, u.seq.length, [...u.marks].join(";"), u.psms || "", u.abundance || "", [...u.conf].join(", "), [...u.mods].join("; "), [...u.proteins].join(" | "), names]);
+    uh.push([u.seq, u.seq.length, [...u.marks].join(";"), u.psms || "", u.abundance || "", [...u.conf].join(", "), [...u.mods].join("; "), [...u.proteins].join(" | "),
+      u.files ? [...u.files].join("; ") : "", names]);
   const ws3 = XLSX.utils.aoa_to_sheet(uh);
-  ws3["!cols"] = [{ wch: 34 }, { wch: 11 }, { wch: 14 }, { wch: 9 }, { wch: 14 }, { wch: 12 }, { wch: 30 }, { wch: 40 }, { wch: 30 }];
+  ws3["!cols"] = [{ wch: 34 }, { wch: 11 }, { wch: 14 }, { wch: 9 }, { wch: 14 }, { wch: 12 }, { wch: 30 }, { wch: 40 }, { wch: 30 }, { wch: 30 }];
   XLSX.utils.book_append_sheet(wb, ws3, "Unplaced peptides");
 
   /* QC sheet */
   const q = [["Check", "Metric", "Value", "Verdict", "Notes"]];
-  if (HOSTQC) {
-    q.push(["Host background", "Signature proteins detected", `${HOSTQC.detected} / ${HOSTQC.n}`, VERDICT[HOSTQC.verdict][0], HOSTQC.sig.name]);
-    q.push(["Host background", "Median |log2(observed/expected)|", +HOSTQC.medDev.toFixed(3), "", `${HOSTQC.fold.toFixed(2)}x off expected`]);
-    q.push(["Host background", "Signature proteins off by >2x", HOSTQC.outliers.length, "", HOSTQC.outliers.map(o => `${o.desc} ${o.dev > 0 ? "+" : ""}${o.dev.toFixed(1)}`).join("; ")]);
-    q.push(["Host background", "Host proteins in file", HOSTQC.hostProteins, "", HOSTQC.note]);
+  for (const f of HOSTQCS) {
+    const h = f.qc, where = `Host background — ${f.name}`;
+    q.push([where, "Signature proteins detected", `${h.detected} / ${h.n}`, VERDICT[h.verdict][0], h.sig.name]);
+    q.push([where, "Median |log2(observed/expected)|", +h.medDev.toFixed(3), "", `${h.fold.toFixed(2)}x off expected`]);
+    q.push([where, "Signature proteins off by >2x", h.outliers.length, "", h.outliers.map(o => `${o.desc} ${o.dev > 0 ? "+" : ""}${o.dev.toFixed(1)}`).join("; ")]);
+    q.push([where, "Host proteins in file", h.hostProteins, "", h.note]);
     q.push([]);
-    q.push(["Signature protein", "Accession", "Expected (per 10,000)", "Observed (per 10,000)", "log2 ratio"]);
-    for (const r of HOSTQC.rows) q.push([r.desc, r.acc, r.exp, +r.obs.toFixed(2), r.dev === null ? "not detected" : +r.dev.toFixed(2)]);
+    q.push([`Signature protein — ${f.name}`, "Accession", "Expected (per 10,000)", "Observed (per 10,000)", "log2 ratio"]);
+    for (const r of h.rows) q.push([r.desc, r.acc, r.exp, +r.obs.toFixed(2), r.dev === null ? "not detected" : +r.dev.toFixed(2)]);
     q.push([]);
   }
   for (const r of results) {
@@ -1156,7 +1224,8 @@ function storeZip(files) {
 
 /* ---------------- app state ---------------- */
 const $ = id => document.getElementById(id);
-let PEPS = [], CONSTRUCTS = [], RESULTS = [], PROTEINS = [], HOSTQC = null, HOSTTOTAL = 0, XLNAME = "", usingExample = true;
+const MAXPEP = 50, MAXCON = 10;
+let PEPS = [], CONSTRUCTS = [], RESULTS = [], PROTEINS = [], HOSTQCS = [], HOSTTOTAL = 0, XLNAME = "", usingExample = true, SHOWALLQC = false;
 
 function setStatus(msg, err) { const s = $("st"); s.textContent = msg; s.classList.toggle("err", !!err); }
 function refreshButtons() {
@@ -1172,26 +1241,47 @@ async function readFile(file, as) {
     as === "buf" ? r.readAsArrayBuffer(file) : r.readAsText(file);
   });
 }
-async function loadPeptideFile(file) {
+async function readSheetRows(file) {
   const lower = file.name.toLowerCase();
-  let rows;
-  if (/\.(csv|tsv|txt)$/.test(lower)) {
-    const text = await readFile(file, "text");
-    const wb = XLSX.read(text, { type: "string", raw: true });
-    rows = [];
-    for (const n of wb.SheetNames) rows = rows.concat(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }));
-  } else {
-    const wb = XLSX.read(await readFile(file, "buf"), { type: "array" });
-    rows = [];
-    for (const n of wb.SheetNames) rows = rows.concat(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }));
+  let wb;
+  if (/\.(csv|tsv|txt)$/.test(lower)) wb = XLSX.read(await readFile(file, "text"), { type: "string", raw: true });
+  else wb = XLSX.read(await readFile(file, "buf"), { type: "array" });
+  let rows = [];
+  for (const n of wb.SheetNames) rows = rows.concat(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }));
+  return rows;
+}
+/* Several exports are pooled into one peptide set: aggregate() merges rows that
+   share a sequence, so PSMs and abundances add up across runs and each group
+   records which files it came from. Host QC stays per file — background is a
+   property of one prep, and averaging it would hide a single bad run — while
+   the protein table is also pooled, for the reporter ppm denominator and for
+   the "use as baseline" button. */
+async function loadPeptideFiles(files, onProgress) {
+  const parsed = [], perFile = [], byAcc = new Map(), bad = [];
+  let i = 0;
+  for (const file of files) {
+    /* Yield to the browser between files so the status line repaints — fifty
+       exports take minutes and a frozen page looks like a crash. */
+    if (onProgress) { onProgress(++i, files.length, file.name); await new Promise(r => setTimeout(r, 0)); }
+    const rows = await readSheetRows(file);
+    const peps = parsePeptideRows(rows, file.name);
+    if (!peps.length) { bad.push(file.name); continue; }
+    parsed.push(...peps);
+    const prots = parseProteinRows(rows);
+    perFile.push({ name: file.name, nPep: peps.length, qc: hostQC(prots), prots });
+    for (const p of prots) {
+      const e = byAcc.get(p.acc);
+      if (e) { e.ab += p.ab; e.psms += p.psms; }
+      else byAcc.set(p.acc, { ...p });
+    }
   }
-  const parsed = parsePeptideRows(rows);
-  if (!parsed.length) throw new Error(`no peptide column found in ${file.name} — expected a header cell named "Annotated Sequence", "Sequence" or "Peptide"`);
-  PROTEINS = parseProteinRows(rows);
+  if (!parsed.length)
+    throw new Error(`no peptide column found in ${bad.join(", ") || "the selected files"} — expected a header cell named "Annotated Sequence", "Sequence" or "Peptide"`);
+  PROTEINS = [...byAcc.values()];
   HOSTTOTAL = PROTEINS.filter(p => !/TARGET|BAIT|PREY|CONSTRUCT/i.test(p.mark)).reduce((a, p) => a + p.ab, 0);
-  HOSTQC = hostQC(PROTEINS);
-  XLNAME = file.name.replace(/\.[^.]+$/, "");
-  return aggregate(parsed);
+  HOSTQCS = perFile.filter(f => f.qc);
+  XLNAME = files.length === 1 ? files[0].name.replace(/\.[^.]+$/, "") : `${perFile.length} exports`;
+  return { peps: aggregate(parsed), sources: perFile, skipped: bad };
 }
 async function loadConstructFile(file) {
   const lower = file.name.toLowerCase();
@@ -1259,37 +1349,84 @@ function run() {
   setStatus(bits.join(" · ") + ".");
   refreshButtons();
 }
-/* Stable ids, and a default of everything included. */
+/* Stable ids, and the default selection. Minigene and unassigned peptides that
+   map to a single protein start included; junction-spanning and reporter / 2A
+   peptides, and anything whose sequence occurs in more than one protein, start
+   excluded — they are the classes that need a deliberate decision before they
+   go into an export. An unknown protein count (no "# Proteins" column) is not
+   treated as multi-protein. Toggling a group still overrides this. */
+const defaultSelected = m =>
+  m.category !== "junction" && m.category !== "reporter" && !isMultiProtein(m.pep);
 function markIds() {
   RESULTS.forEach((r, i) => r.maps.forEach((m, j) => {
     m._id = `p${i}-${j}`;
-    if (m.selected === undefined) m.selected = true;
+    if (m.selected === undefined) m.selected = defaultSelected(m);
   }));
 }
 function draw() {
   markIds();
-  $("out").innerHTML = renderHostQC(HOSTQC) + RESULTS.map((r, i) => renderResult(r, i)).join("");
+  const many = HOSTQCS.length >= QCSUMMARY_FROM;
+  const cards = (many && !SHOWALLQC ? HOSTQCS.filter(f => f.qc.verdict !== "pass") : HOSTQCS)
+    .map(f => renderHostQC(f.qc, HOSTQCS.indexOf(f), HOSTQCS.length > 1 ? f.name : "")).join("");
+  $("out").innerHTML = (many ? renderHostSummary(HOSTQCS) : "") + cards
+    + RESULTS.map((r, i) => renderResult(r, i)).join("");
   wireHover(); wireSelection(); wireSignature();
   RESULTS.forEach((r, i) => syncSelection(i));
 }
+/* Host shares for one file, in parts per 10,000 of its own host signal, so
+   files of different depth are comparable. */
+function hostShares(prots) {
+  const host = prots.filter(p => !/TARGET|BAIT|PREY|CONSTRUCT/i.test(p.mark) && p.ab > 0);
+  const tot = host.reduce((a, p) => a + p.ab, 0);
+  const m = new Map();
+  if (tot) for (const p of host) m.set(p.acc, { s: p.ab / tot * 1e4, desc: p.desc });
+  return m;
+}
+function saveSignature(sig, msg) {
+  try {
+    localStorage.setItem("mpm.signature", JSON.stringify(sig));
+    for (const f of HOSTQCS) f.qc = hostQC(f.prots);
+    draw();
+    setStatus(msg);
+  } catch { setStatus("Could not save the baseline — this browser is blocking site storage.", true); }
+}
 function wireSignature() {
-  const save = $("sig-save"), reset = $("sig-reset");
-  if (save) save.addEventListener("click", () => {
-    if (!PROTEINS.length) return;
-    const host = PROTEINS.filter(p => !/TARGET|BAIT|PREY|CONSTRUCT/i.test(p.mark) && p.ab > 0);
-    const tot = host.reduce((a, p) => a + p.ab, 0);
-    const proteins = host.slice().sort((a, b) => b.ab - a.ab).slice(0, 30)
-      .map(p => [p.acc, p.desc.slice(0, 52), +(p.ab / tot * 1e4).toFixed(2)]);
-    const sig = { name: `${XLNAME || "this file"} (n = 1)`, proteins };
-    try {
-      localStorage.setItem("mpm.signature", JSON.stringify(sig));
-      HOSTQC = hostQC(PROTEINS); draw();
-      setStatus("Host baseline saved in this browser. A single run is a weaker reference than the built-in three-run one.");
-    } catch { setStatus("Could not save the baseline — this browser is blocking site storage.", true); }
+  for (const btn of document.querySelectorAll(".sig-save")) btn.addEventListener("click", () => {
+    const f = HOSTQCS[+btn.dataset.file];
+    if (!f) return;
+    const sh = hostShares(f.prots);
+    const proteins = [...sh.entries()].sort((a, b) => b[1].s - a[1].s).slice(0, 30)
+      .map(([acc, v]) => [acc, (v.desc || "").slice(0, 52), +v.s.toFixed(2)]);
+    saveSignature({ name: `${f.name.replace(/\.[^.]+$/, "")} (n = 1)`, proteins },
+      "Host baseline saved in this browser. A single run is a weaker reference than a multi-run one.");
   });
-  if (reset) reset.addEventListener("click", () => {
+  /* Same derivation as the built-in signature: detected in every loaded export,
+     isoform-ambiguous entries (CV > 35%) dropped, top 30 by mean share. */
+  for (const btn of document.querySelectorAll(".sig-save-all")) btn.addEventListener("click", () => {
+    const maps = HOSTQCS.map(f => hostShares(f.prots)).filter(m => m.size);
+    if (maps.length < 2) return;
+    const rows = [];
+    for (const [acc, v] of maps[0]) {
+      if (!maps.every(m => m.has(acc))) continue;
+      const vals = maps.map(m => m.get(acc).s);
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / (vals.length - 1));
+      if (mean && sd / mean > 0.35) continue;
+      rows.push([acc, (v.desc || "").slice(0, 52), +mean.toFixed(2)]);
+    }
+    if (!rows.length) { setStatus("No protein was detected in every export with a CV under 35% — nothing to build a baseline from.", true); return; }
+    rows.sort((a, b) => b[2] - a[2]);
+    const proteins = rows.slice(0, 30);
+    saveSignature({ name: `${maps.length} loaded exports (n = ${maps.length})`, proteins },
+      `Host baseline saved in this browser from ${maps.length} exports — ${proteins.length} proteins detected in all of them with CV under 35%.`);
+  });
+  for (const btn of document.querySelectorAll(".qc-toggle")) btn.addEventListener("click", () => {
+    SHOWALLQC = !SHOWALLQC; draw();
+  });
+  for (const btn of document.querySelectorAll(".sig-reset")) btn.addEventListener("click", () => {
     try { localStorage.removeItem("mpm.signature"); } catch { /* nothing stored */ }
-    HOSTQC = hostQC(PROTEINS); draw();
+    for (const f of HOSTQCS) f.qc = hostQC(f.prots);
+    draw();
     setStatus("Restored the built-in host signature.");
   });
 }
@@ -1416,7 +1553,7 @@ function loadExample() {
     proteins: new Set([mark === "HUMAN" ? "EXAMPLE-host protein" : "EXAMPLE-target"]),
     protText: (mark || "TARGET").toLowerCase(), marks: new Set((mark || "TARGET").split(";")),
     nProt: nProt || 1, accs: new Set(["EXAMPLE-construct"]),
-    xcorr: 3.1, q: 0.0001, rt: 42.5, rows: []
+    xcorr: 3.1, q: 0.0001, rt: 42.5, files: new Set()
   });
   PEPS = [
     mk("VLWQTFSELPK", 7, 4.1e7, "High"),
@@ -1434,28 +1571,41 @@ function loadExample() {
   const r = Object.assign(mapPeptides(con, sc.kept), { offered: sc.kept.length, scope: sc, isExample: true });
   r.reporterQC = reporterQC(r, 1e9);
   RESULTS = [r];
-  HOSTQC = null;
+  HOSTQCS = [];
   usingExample = true;
   draw(); refreshButtons();
 }
 
 /* ---------------- wiring ---------------- */
 $("f-xl").addEventListener("change", async e => {
-  const f = e.target.files[0]; if (!f) return;
+  const all = [...e.target.files], files = all.slice(0, MAXPEP); if (!files.length) return;
   try {
-    setStatus("Reading " + f.name + " …");
-    PEPS = await loadPeptideFile(f);
+    setStatus(files.length === 1 ? "Reading " + files[0].name + " …" : `Reading ${files.length} exports …`);
+    const { peps, sources, skipped } = await loadPeptideFiles(files, (n, tot, name) => {
+      if (tot > 1) setStatus(`Reading export ${n} of ${tot} — ${name} …`);
+    });
+    PEPS = peps;
     applyScopeAvailability();
     const c = scopeCounts();
-    $("n-xl").textContent = `${f.name} — ${PEPS.length.toLocaleString()} unique peptides`;
-    setStatus(c.target
-      ? `${PEPS.length.toLocaleString()} unique peptides read from ${f.name}; ${c.target.toLocaleString()} are from the construct database and will be mapped.`
-      : `${PEPS.length.toLocaleString()} unique peptide sequences read from ${f.name}.`);
-  } catch (err) { PEPS = []; applyScopeAvailability(); $("n-xl").textContent = ""; setStatus(err.message, true); }
+    const shown = sources.slice(0, 6).map(s =>
+      `<span>${esc(s.name)} — ${s.nPep.toLocaleString()} peptide rows</span>`);
+    if (sources.length > 6) {
+      const rest = sources.slice(6).reduce((a, s) => a + s.nPep, 0);
+      shown.push(`<span>+ ${sources.length - 6} more exports — ${rest.toLocaleString()} peptide rows</span>`);
+    }
+    $("n-xl").innerHTML = shown.join("");
+    const where = sources.length === 1 ? sources[0].name : `${sources.length} pooled exports`;
+    const bits = [c.target
+      ? `${PEPS.length.toLocaleString()} unique peptides read from ${where}; ${c.target.toLocaleString()} are from the construct database and will be mapped.`
+      : `${PEPS.length.toLocaleString()} unique peptide sequences read from ${where}.`];
+    if (skipped.length) bits.push(`No peptide table found in ${skipped.join(", ")} — skipped.`);
+    if (all.length > MAXPEP) bits.push(`Only the first ${MAXPEP} of ${all.length} selected files were read.`);
+    setStatus(bits.join(" "), !!skipped.length || all.length > MAXPEP);
+  } catch (err) { PEPS = []; HOSTQCS = []; applyScopeAvailability(); $("n-xl").textContent = ""; setStatus(err.message, true); }
   refreshButtons();
 });
 $("f-sq").addEventListener("change", async e => {
-  const files = [...e.target.files].slice(0, 4); if (!files.length) return;
+  const files = [...e.target.files].slice(0, MAXCON); if (!files.length) return;
   CONSTRUCTS = []; const names = [], errs = [];
   for (const f of files) {
     try { const c = await loadConstructFile(f); CONSTRUCTS.push(c); names.push(`${f.name} — ${c.name}, ${c.seq.length} bp, ${c.features.length} features`); }
